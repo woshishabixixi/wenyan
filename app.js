@@ -19,7 +19,8 @@ const state = {
   newDone: { date: '', count: 0 },
   queue: [],
   relearn: [],
-  revealed: false,
+  peekedId: null,
+  lastGraded: null,
   search: '',
   editor: null,
   batch: '',
@@ -180,14 +181,14 @@ function bumpStreak() {
 async function gradeCard(g) {
   const card = currentCard();
   if (!card) return;
-  if (!state.revealed) { toast('先展开释义再评分'); return; }
   const wasNew = card.state === 'new';
   const patched = { ...card, ...schedule(card, g, Date.now()) };
   await persist(patched);
   db.logReview({ id: card.id, grade: g });
   if (wasNew) bumpNewDone();
   bumpStreak();
-  state.revealed = false;
+  state.peekedId = null;
+  state.lastGraded = { id: card.id, grade: g }; // 停在这张的答案上，等用户看完再「下一张」
   // 模糊 / 不认识：进「推迟名单」，本次会话内隔几张再抽回来；评「认识」则从名单移除
   if (g === GRADES.GOOD) {
     state.relearn = state.relearn.filter((e) => e.id !== card.id);
@@ -207,7 +208,8 @@ async function masterCard(id) {
   const card = state.cards.get(id);
   if (!card) return;
   await persist({ ...card, bucket: 'mastered', masteredAt: Date.now() });
-  state.revealed = false;
+  state.peekedId = null;
+  state.lastGraded = null;
   rebuildQueue();
   render();
   toast('已移入「已掌握」，可在该页恢复');
@@ -256,7 +258,26 @@ function renderSenses(card) {
   return '<div class="senses">' + body + tags + '</div>';
 }
 
+const GRADE_LABEL = { 0: '不认识', 1: '模糊', 2: '认识' };
+
+/** 评分后的答案页：显示这张的完整释义，等用户看完点「下一张」 */
+function renderAnswer() {
+  const g = state.lastGraded;
+  const card = state.cards.get(g.id);
+  if (!card) { state.lastGraded = null; renderReview(); return; }
+  view.innerHTML = '<div class="review-card is-answered">'
+    + '<span class="answered-tag" data-g="' + g.grade + '">已记录 · ' + esc(GRADE_LABEL[g.grade]) + '</span>'
+    + '<div class="word">' + esc(card.word) + '</div>'
+    + '<div class="pinyin">' + (card.pinyin ? '/' + esc(card.pinyin) + '/' : '')
+    + '<button class="speak" data-action="speak-answer" type="button">🔊</button></div>'
+    + renderSenses(card)
+    + '<div class="answered-foot">下次复习：' + esc(describeUntil(card.due)) + '</div>'
+    + '</div>'
+    + '<div class="next-bar"><button class="btn primary btn-wide" data-action="next-card" type="button">下一张</button></div>';
+}
+
 function renderReview() {
+  if (state.lastGraded) { renderAnswer(); return; }
   const card = currentCard();
   if (!card) {
     const at = nextDueAt();
@@ -265,22 +286,24 @@ function renderReview() {
       + '<br><span style="font-size:13px">可在「词库」添加生词，或在「设置」调高每日新词上限</span></div>';
     return;
   }
-  const revealed = state.revealed;
-  view.innerHTML = '<div class="review-card" data-action="reveal">'
+  const peeked = state.peekedId === card.id;
+  view.innerHTML = '<div class="review-card" data-action="peek">'
     + '<span class="badge">' + esc((card.tags && card.tags[0]) || (card.state === 'new' ? '新词' : '复习')) + '</span>'
     + '<div class="word">' + esc(card.word) + '</div>'
     + '<div class="pinyin">' + (card.pinyin ? '/' + esc(card.pinyin) + '/' : '') + '<button class="speak" data-action="speak" type="button">🔊</button></div>'
-    + (revealed ? renderSenses(card) : '<div class="hint">尝试回想释义<br>点击空白处查看提示</div>')
-    + '<div class="card-foot"><button class="link-btn" data-action="master" type="button">太简单 · 移入已掌握</button></div>'
+    + (peeked ? renderSenses(card) : '<div class="hint">先在脑子里回想释义<br>判断完下面三档，立刻显示答案</div>')
+    + '<div class="card-foot">'
+    + (peeked
+      ? '<button class="link-btn" data-action="unpeek" type="button">收起释义</button>'
+      : '<button class="link-btn" data-action="peek" type="button">想不起来，先看答案</button>')
+    + '<button class="link-btn" data-action="master" type="button">太简单 · 移入已掌握</button></div>'
     + '</div>'
-    + '<div class="grade-bar' + (revealed ? '' : ' is-locked') + '">'
+    + '<div class="grade-bar">'
     + '<button class="grade" data-action="grade" data-g="0" type="button">不认识</button>'
     + '<button class="grade" data-action="grade" data-g="1" type="button">模糊</button>'
     + '<button class="grade" data-action="grade" data-g="2" type="button">认识</button>'
     + '</div>'
-    + (revealed
-      ? '<div class="grade-note">' + (card.reps ? '已复习 ' + esc(String(card.reps)) + ' 次 · 当前间隔 ' + esc(describeInterval(card)) : '新词 · 第一次复习') + '</div>'
-      : '<div class="grade-note">先回想，展开释义后才能评分</div>');
+    + '<div class="grade-note">' + (card.reps ? '已复习 ' + esc(String(card.reps)) + ' 次' : '新词 · 第一次复习') + ' · 点按钮后显示释义</div>';
 }
 
 function renderMastered() {
@@ -580,7 +603,8 @@ if (tabs) {
     const btn = e.target.closest('[data-route]');
     if (!btn) return;
     state.route = btn.dataset.route;
-    state.revealed = false;
+    state.peekedId = null;
+    state.lastGraded = null;
     state.editor = null;
     render();
   });
@@ -591,11 +615,23 @@ if (view) {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const action = el.dataset.action;
-    if (action === 'grade' || action === 'master' || action === 'speak') e.stopPropagation();
-    if (action === 'reveal') { if (!state.revealed) { state.revealed = true; render(); } return; }
+    if (action === 'grade' || action === 'master' || action === 'speak' || action === 'speak-answer' || action === 'next-card') e.stopPropagation();
+    if (action === 'peek') {
+      const c = currentCard();
+      if (c) { state.peekedId = c.id; render(); }
+      return;
+    }
+    if (action === 'unpeek') { state.peekedId = null; render(); return; }
+    if (action === 'next-card') { state.lastGraded = null; state.peekedId = null; render(); return; }
     if (action === 'speak') {
       const card = currentCard();
       if (card) speak(card.word);
+      return;
+    }
+    if (action === 'speak-answer') {
+      const g = state.lastGraded;
+      const c = g ? state.cards.get(g.id) : null;
+      if (c) speak(c.word);
       return;
     }
     if (action === 'grade') { await gradeCard(Number(el.dataset.g)); return; }

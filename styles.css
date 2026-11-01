@@ -345,3 +345,31 @@ html, body {
   margin-bottom: 10px;
 }
 .check input { width: 18px; height: 18px; accent-color: var(--teal); }
+/* 答案页 */
+.answered-tag {
+  align-self: center;
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 4px 12px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.answered-tag[data-g="0"] { background: #fdeee8; color: var(--red); }
+.answered-tag[data-g="1"] { background: #f1f0f4; color: #55606b; }
+.answered-tag[data-g="2"] { background: #e6f4f1; color: var(--teal); }
+.answered-foot {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.review-card.is-answered { cursor: default; }
+.next-bar { margin-top: 16px; }
+.btn-wide {
+  width: 100%;
+  padding: 18px 0;
+  font-size: 17px;
+  border-radius: 16px;
+  font-weight: 600;
+}
+.card-foot { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
