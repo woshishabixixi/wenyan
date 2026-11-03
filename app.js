@@ -24,6 +24,7 @@ const state = {
   lastUndo: null,
   filter: 'all',
   today: { date: '', again: 0, hard: 0, good: 0 },
+  favs: [],
   search: '',
   editor: null,
   batch: '',
@@ -113,6 +114,7 @@ async function loadAll() {
   state.streak = (await db.getMeta('streak', null)) || { lastDate: '', count: 0 };
   state.newDone = (await db.getMeta('newDone', null)) || { date: '', count: 0 };
   state.today = (await db.getMeta('todayStats', null)) || { date: '', again: 0, hard: 0, good: 0 };
+  state.favs = (await db.getMeta('favs', null)) || [];
 }
 
 /* ---------- 队列 ---------- */
@@ -121,8 +123,21 @@ function newDoneToday() {
   return state.newDone.date === dayKey() ? state.newDone.count : 0;
 }
 
+async function buryCard(id) {
+  const card = state.cards.get(id);
+  if (!card) return;
+  await persist({ ...card, buriedDay: dayKey() });
+  state.relearn = state.relearn.filter((e) => e.id !== id);
+  state.lastGraded = null;
+  state.peekedId = null;
+  rebuildQueue();
+  render();
+  toast('这张今天不再出现');
+}
+
 function rebuildQueue() {
-  const list = Array.from(state.cards.values());
+  const today = dayKey();
+  const list = Array.from(state.cards.values()).filter((c) => c.buriedDay !== today);
   let q = buildQueue(list, {
     now: Date.now(),
     dailyNewLimit: state.settings.dailyNewLimit,
@@ -287,13 +302,17 @@ function renderStats() {
 
 function renderSenses(card) {
   const senses = Array.isArray(card.senses) && card.senses.length ? card.senses : [{ pos: '', def: '（暂无释义）' }];
-  const body = senses.map((s) => {
-    const ex = s.example && s.example.text
-      ? '<div class="sense-ex">' + esc(s.example.text)
-        + (s.example.source ? ' <span class="src">—— ' + esc(s.example.source) + '</span>' : '')
-        + (s.example.translation ? '<div class="tr">' + esc(s.example.translation) + '</div>' : '')
-        + '</div>'
-      : '';
+  const body = senses.map((s, si) => {
+    const exs = senseExamples(s).map((e, ei) => {
+      const on = isFav(card.id, e.text);
+      return '<div class="sense-ex">'
+        + '<button class="fav' + (on ? ' is-on' : '') + '" data-action="fav" data-id="' + esc(card.id) + '" data-si="' + si + '" data-ei="' + ei + '" type="button" title="收藏这句">' + (on ? '★' : '☆') + '</button>'
+        + '<span class="ex-text">' + esc(e.text)
+        + (e.source ? ' <span class="src">—— ' + esc(e.source) + '</span>' : '') + '</span>'
+        + (e.translation ? '<div class="tr">' + esc(e.translation) + '</div>' : '')
+        + '</div>';
+    }).join('');
+    const ex = exs;
     return '<div class="sense">'
       + (s.pos ? '<span class="sense-pos">' + esc(s.pos) + '</span>' : '')
       + (s.rare ? '<span class="sense-rare">少考</span>' : '')
@@ -306,6 +325,35 @@ function renderSenses(card) {
 }
 
 const GRADE_LABEL = { 0: '不认识', 1: '模糊', 2: '认识' };
+
+/** 兼容老数据：单条例句写成 example，多条例句写成 examples */
+function senseExamples(sense) {
+  if (!sense) return [];
+  if (Array.isArray(sense.examples)) return sense.examples.filter((e) => e && e.text);
+  if (sense.example && sense.example.text) return [sense.example];
+  return [];
+}
+
+function favKey(cardId, text) { return cardId + '' + text; }
+
+function isFav(cardId, text) {
+  const k = favKey(cardId, text);
+  return state.favs.some((f) => favKey(f.cardId, f.text) === k);
+}
+
+async function toggleFav(card, ex) {
+  const k = favKey(card.id, ex.text);
+  const idx = state.favs.findIndex((f) => favKey(f.cardId, f.text) === k);
+  if (idx >= 0) {
+    state.favs.splice(idx, 1);
+    toast('已取消收藏');
+  } else {
+    state.favs.unshift({ cardId: card.id, word: card.word, text: ex.text, source: ex.source || '', translation: ex.translation || '', at: Date.now() });
+    toast('已收藏这句例句');
+  }
+  await db.setMeta('favs', state.favs);
+  render();
+}
 const LEECH_LAPSES = 3; // 连续遗忘达到这个次数，自动标成「难词」
 
 function renderProgress() {
@@ -362,9 +410,23 @@ function renderReview() {
     + '<button class="grade" data-action="grade" data-g="0" type="button">不认识</button>'
     + '<button class="grade" data-action="grade" data-g="1" type="button">模糊</button>'
     + '<button class="grade" data-action="grade" data-g="2" type="button">认识</button>'
+    + '<button class="grade grade-bury" data-action="bury" type="button">今天<br>不再出现</button>'
     + '</div>'
     + '<div class="grade-note">' + (card.reps ? '已复习 ' + esc(String(card.reps)) + ' 次' : '新词 · 第一次复习') + ' · 点按钮后显示释义'
     + (state.lastUndo ? ' · <button class="inline-link" data-action="undo" type="button">撤销上一张</button>' : '') + '</div>';
+}
+
+function renderFavs() {
+  if (!state.favs.length) {
+    view.innerHTML = '<div class="empty"><strong>还没有收藏的例句</strong>背词时，每条例句左边有个 ☆，点一下就把这句收进来，方便集中回看。</div>';
+    return;
+  }
+  view.innerHTML = '<div class="section" style="padding:12px 14px">共 ' + state.favs.length + ' 条例句收藏</div>'
+    + state.favs.map((f, i) => '<div class="row"><div class="row-main">'
+      + '<div class="row-word">' + esc(f.word || '') + '</div>'
+      + '<div class="fav-ex">' + esc(f.text) + (f.source ? ' <span class="src">—— ' + esc(f.source) + '</span>' : '') + '</div>'
+      + (f.translation ? '<div class="row-sub">' + esc(f.translation) + '</div>' : '')
+      + '</div><button class="btn" data-action="unfav" data-fi="' + i + '" type="button">取消</button></div>').join('');
 }
 
 function renderMastered() {
@@ -547,6 +609,7 @@ function render() {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('is-active', t.dataset.route === state.route));
   if (!view) return;
   if (state.route === 'review') renderReview();
+  else if (state.route === 'favs') renderFavs();
   else if (state.route === 'mastered') renderMastered();
   else if (state.route === 'library') renderLibrary();
   else renderSettings();
@@ -557,7 +620,10 @@ function render() {
 function cardFromDraft(draft, existing) {
   const senses = (draft.senses || []).filter((s) => s && s.def).map((s) => {
     const out = { pos: s.pos || '', def: s.def };
-    if (s.exText) out.example = { text: s.exText, source: s.exSrc || '', translation: '' };
+    const list = [];
+    if (s.exText) list.push({ text: s.exText, source: s.exSrc || '', translation: '' });
+    (s.extras || []).forEach((e) => { if (e && e.text) list.push(e); });
+    if (list.length) out.examples = list;
     if (s.rare) out.rare = true;
     return out;
   });
@@ -634,7 +700,7 @@ async function batchImport() {
     const rare = rawDef.startsWith('*');
     const sense = { pos: p.pos || '', def: rare ? rawDef.slice(1).trim() || '（待补充释义）' : (rawDef || '（待补充释义）') };
     if (rare) sense.rare = true;
-    if (p.exText) sense.example = { text: p.exText, source: p.exSrc || '', translation: '' };
+    if (p.exText) sense.examples = [{ text: p.exText, source: p.exSrc || '', translation: '' }];
     words.add(word);
     fresh.push({
       id: 'custom-' + now.toString(36) + '-' + String(fresh.length).padStart(3, '0'),
@@ -730,7 +796,7 @@ if (view) {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const action = el.dataset.action;
-    if (action === 'grade' || action === 'master' || action === 'speak' || action === 'speak-answer' || action === 'next-card') e.stopPropagation();
+    if (action === 'grade' || action === 'master' || action === 'speak' || action === 'speak-answer' || action === 'next-card' || action === 'bury' || action === 'fav') e.stopPropagation();
     if (action === 'peek') {
       const c = currentCard();
       if (c) { state.peekedId = c.id; render(); }
@@ -738,6 +804,24 @@ if (view) {
     }
     if (action === 'unpeek') { state.peekedId = null; render(); return; }
     if (action === 'undo') { await undoLast(); return; }
+    if (action === 'bury') { const c = currentCard(); if (c) await buryCard(c.id); return; }
+    if (action === 'fav') {
+      const card = state.cards.get(el.dataset.id);
+      const s = card && card.senses ? card.senses[Number(el.dataset.si)] : null;
+      const ex = s ? senseExamples(s)[Number(el.dataset.ei)] : null;
+      if (card && ex) await toggleFav(card, ex);
+      return;
+    }
+    if (action === 'unfav') {
+      const i = Number(el.dataset.fi);
+      if (i >= 0 && i < state.favs.length) {
+        state.favs.splice(i, 1);
+        await db.setMeta('favs', state.favs);
+        render();
+        toast('已取消收藏');
+      }
+      return;
+    }
     if (action === 'filter') {
       state.filter = el.dataset.f || 'all';
       renderLibrary();
@@ -766,13 +850,17 @@ if (view) {
         id: c.id,
         word: c.word,
         pinyin: c.pinyin || '',
-        senses: (c.senses || []).map((s) => ({
-          pos: s.pos || '',
-          def: s.def || '',
-          exText: (s.example && s.example.text) || '',
-          exSrc: (s.example && s.example.source) || '',
-          rare: !!s.rare,
-        })),
+        senses: (c.senses || []).map((s) => {
+          const exs = senseExamples(s);
+          return {
+            pos: s.pos || '',
+            def: s.def || '',
+            exText: (exs[0] && exs[0].text) || '',
+            exSrc: (exs[0] && exs[0].source) || '',
+            rare: !!s.rare,
+            extras: exs.slice(1), // 其余例句不在表单里编辑，但必须原样保留
+          };
+        }),
       };
       if (!state.editor.senses.length) state.editor.senses = [emptySense()];
       render();
