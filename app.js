@@ -2,8 +2,8 @@ import { GRADES, schedule, newCardState, describeInterval, buildQueue } from './
 import * as db from './db.js';
 
 const DECK_URL = './data/deck.builtin.json';
-const APP_VERSION = 'v29'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
-const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4 };
+const APP_VERSION = 'v30'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
+const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4, lessMotion: false };
 const RELEARN_GAP_MIN = 3;   // 硬下限：模糊/不认识的词至少隔 3 张才回来
 const RELEARN_GAP_MAX = 10;
 
@@ -498,14 +498,12 @@ const QUIZ_WINS = [
 ];
 
 function playWin(force = false) {
-  let reduced = false;
-  try {
-    reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  } catch (err) { reduced = false; }
+  // 只有用户在设置里主动关掉时才用静态版；系统「减弱动画」不再静默拦截
+  const reduced = !force && !!state.settings.lessMotion;
 
   const v = QUIZ_WINS[Math.floor(Math.random() * QUIZ_WINS.length)];
   const box = document.createElement('div');
-  box.className = 'win-burst' + (reduced && !force ? ' is-static' : '');
+  box.className = 'win-burst' + (reduced ? ' is-static' : '');
   box.style.setProperty('--win-color', v.color);
 
   let dots = '';
@@ -519,7 +517,7 @@ function playWin(force = false) {
     + '<div class="win-text">' + esc(v.text) + '</div></div>'
     + '<div class="win-dots">' + dots + '</div>';
   document.body.appendChild(box);
-  setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, reduced && !force ? 1100 : 1500);
+  setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, reduced ? 1100 : 1600);
 }
 
 async function markRight(q) {
@@ -806,7 +804,10 @@ function renderSettings() {
   view.innerHTML = '<div class="section"><h2>关于</h2>'
     + '<p class="sub">界面版本 <b>' + esc(APP_VERSION) + '</b> · 词库 ' + esc(String(state.cards.size || 0)) + ' 条'
     + '。如果答题后没看到答对动画，先点下面这个按钮试一下。</p>'
-    + '<div class="actions"><button class="btn" data-action="preview-win" type="button">预览答对动画</button></div></div>'
+    + '<div class="actions"><button class="btn" data-action="preview-win" type="button">预览答对动画</button>'
+    + '<button class="btn' + (state.settings.lessMotion ? ' primary' : '') + '" data-action="toggle-motion" type="button">'
+    + (state.settings.lessMotion ? '已关闭动画（点此打开）' : '减弱动画') + '</button></div>'
+    + '<p class="sub" style="margin-top:10px">默认一定会放动画。如果觉得晃眼，点「减弱动画」改为静态提示。</p></div>'
     + '<div class="section"><h2>今天</h2>'
     + '<p class="sub">已复习 ' + reviewedToday() + ' 张 · 认识 ' + t.good + ' · 模糊 ' + t.hard + ' · 不认识 ' + t.again + '</p></div>'
     + '<div class="section"><h2>未来 7 天到期</h2><p class="sub">这些卡会在对应那天排进复习队列。</p>' + renderForecast() + '</div>'
@@ -1071,6 +1072,13 @@ if (view) {
       return;
     }
     if (action === 'preview-win') { playWin(true); return; }
+    if (action === 'toggle-motion') {
+      state.settings = { ...state.settings, lessMotion: !state.settings.lessMotion };
+      await db.setMeta('settings', state.settings);
+      render();
+      toast(state.settings.lessMotion ? '已改为静态提示' : '已打开答对动画');
+      return;
+    }
     if (action === 'fav-view') {
       state.favView = el.dataset.v === 'right' ? 'right' : 'favs';
       render();
