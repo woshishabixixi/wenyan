@@ -469,3 +469,30 @@ html, body {
 /* 收藏页 */
 .fav-ex { font-size: 15px; line-height: 1.7; color: #3e4c59; margin-top: 4px; }
 .fav-ex .src { color: var(--ink-soft); font-size: 12px; }
+/* 模式切换 */
+.seg { display: flex; gap: 6px; background: #f1ece4; border-radius: 12px; padding: 4px; margin-bottom: 10px; }
+.seg-btn { flex: 1; border: 0; background: transparent; color: var(--ink-soft); font-size: 14px; padding: 8px 0; border-radius: 9px; cursor: pointer; }
+.seg-btn.is-on { background: #fff; color: var(--teal); font-weight: 700; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06); }
+
+/* 例句填空 */
+.quiz-ex { font-size: 20px; line-height: 1.9; text-align: center; margin: 20px 4px 10px; }
+.quiz-w { color: var(--teal); }
+.quiz-ask { text-align: center; color: var(--ink-soft); font-size: 14px; margin-bottom: 4px; }
+.quiz-opts { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.quiz-opt {
+  text-align: left; border: 1px solid var(--line); background: #fff; border-radius: 14px;
+  padding: 14px 16px; font-size: 16px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start;
+  box-shadow: 0 2px 8px rgba(31, 41, 51, 0.04);
+}
+.quiz-idx { color: var(--ink-soft); font-weight: 700; }
+.quiz-opt.is-right { border-color: #34a89a; background: #e6f4f1; }
+.quiz-opt.is-wrong { border-color: #f3c9b4; background: #fdeee8; }
+.quiz-result { margin-top: 14px; text-align: center; font-size: 15px; font-weight: 600; }
+.quiz-result.ok { color: var(--teal); }
+.quiz-result.no { color: var(--red); }
+.quiz-trans { margin-top: 10px; }
+
+/* 收藏里的释义 */
+.fav-def { margin-top: 6px; font-size: 14px; color: #3e4c59; }
+/* 填空模式：题目卡不需要那么高 */
+.review-card.is-quiz { min-height: 0; padding-bottom: 18px; }

@@ -25,6 +25,8 @@ const state = {
   filter: 'all',
   today: { date: '', again: 0, hard: 0, good: 0 },
   favs: [],
+  mode: 'review',
+  quiz: { q: null, picked: null, n: 0 },
   search: '',
   editor: null,
   batch: '',
@@ -371,14 +373,23 @@ function isFav(cardId, text) {
   return state.favs.some((f) => favKey(f.cardId, f.text) === k);
 }
 
-async function toggleFav(card, ex) {
+async function toggleFav(card, ex, sense) {
   const k = favKey(card.id, ex.text);
   const idx = state.favs.findIndex((f) => favKey(f.cardId, f.text) === k);
   if (idx >= 0) {
     state.favs.splice(idx, 1);
     toast('已取消收藏');
   } else {
-    state.favs.unshift({ cardId: card.id, word: card.word, text: ex.text, source: ex.source || '', translation: ex.translation || '', at: Date.now() });
+    state.favs.unshift({
+      cardId: card.id,
+      word: card.word,
+      pos: (sense && sense.pos) || '',
+      def: (sense && sense.def) || '',
+      text: ex.text,
+      source: ex.source || '',
+      translation: ex.translation || '',
+      at: Date.now(),
+    });
     toast('已收藏这句例句');
   }
   await db.setMeta('favs', state.favs);
@@ -411,7 +422,87 @@ function renderAnswer() {
     + '<div class="next-bar"><button class="btn primary btn-wide" data-action="next-card" type="button">下一张</button></div>';
 }
 
+function renderModeSwitch() {
+  return '<div class="seg">'
+    + '<button class="seg-btn' + (state.mode === 'review' ? ' is-on' : '') + '" data-action="mode" data-m="review" type="button">卡片复习</button>'
+    + '<button class="seg-btn' + (state.mode === 'quiz' ? ' is-on' : '') + '" data-action="mode" data-m="quiz" type="button">例句填空</button>'
+    + '</div>';
+}
+
+/** 出一道「这句里这个字是什么意思」的选择题：同词的其他义项优先做干扰项 */
+function buildQuiz() {
+  const pool = [];
+  state.cards.forEach((c) => {
+    if (c.bucket !== 'active') return;
+    (c.senses || []).forEach((s, si) => {
+      const exs = senseExamples(s);
+      if (!exs.length || !s.def) return;
+      pool.push({ card: c, si, sense: s, ex: exs[Math.floor(Math.random() * exs.length)] });
+    });
+  });
+  if (!pool.length) return null;
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+
+  const opts = new Map();
+  opts.set(pick.sense.def, true);
+  // 干扰项优先级：同一个词的其他义项 → 同词性的义项 → 随便
+  (pick.card.senses || []).forEach((s, i) => {
+    if (i !== pick.si && s.def && !opts.has(s.def) && opts.size < 4) opts.set(s.def, false);
+  });
+  const samePos = pool.filter((p) => p.sense.pos && p.sense.pos === pick.sense.pos);
+  let guard = 0;
+  while (opts.size < 4 && guard < 300) {
+    guard += 1;
+    const src = samePos.length > guard - 1 ? samePos : pool;
+    const other = src[Math.floor(Math.random() * src.length)];
+    if (other && other.sense.def && !opts.has(other.sense.def)) opts.set(other.sense.def, false);
+  }
+  const options = Array.from(opts.entries()).map(([def, ok]) => ({ def, ok }));
+  for (let i = options.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = options[i]; options[i] = options[j]; options[j] = t;
+  }
+  return { cardId: pick.card.id, word: pick.card.word, ex: pick.ex, options, right: pick.sense.def };
+}
+
+function renderQuiz() {
+  if (!state.quiz.q) state.quiz.q = buildQuiz();
+  const q = state.quiz.q;
+  if (!q) {
+    view.innerHTML = renderModeSwitch() + '<div class="empty"><strong>还没有可用来出题的例句</strong>等词库里有带例句的词条后就能练了。</div>';
+    return;
+  }
+  const picked = state.quiz.picked;
+  const exText = String(q.ex.text).split(q.word).join('<b class="quiz-w">' + esc(q.word) + '</b>');
+  const options = q.options.map((o, i) => {
+    let cls = 'quiz-opt';
+    if (picked !== null) {
+      if (o.ok) cls += ' is-right';
+      else if (i === picked) cls += ' is-wrong';
+    }
+    return '<button class="' + cls + '" data-action="answer" data-i="' + i + '" type="button">'
+      + '<span class="quiz-idx">' + 'ABCD'[i] + '</span>' + esc(o.def) + '</button>';
+  }).join('');
+
+  const feedback = picked === null ? '' : '<div class="quiz-result ' + (q.options[picked].ok ? 'ok' : 'no') + '">'
+    + (q.options[picked].ok ? '✅ 答对了' : '❌ 正确答案：' + esc(q.right))
+    + '</div>'
+    + '<div class="sense-ex quiz-trans"><span class="ex-text">译文：' + esc(q.ex.translation || '（这条暂无译文）')
+    + (q.ex.source ? ' <span class="src">—— ' + esc(q.ex.source) + '</span>' : '') + '</span></div>'
+    + '<div class="next-bar"><button class="btn primary btn-wide" data-action="next-quiz" type="button">下一题</button></div>';
+
+  view.innerHTML = renderModeSwitch()
+    + '<div class="review-card is-answered is-quiz">'
+    + '<span class="badge">例句填空 · 第 ' + ((state.quiz.n || 0) + 1) + ' 题</span>'
+    + '<div class="quiz-ex">' + exText + '</div>'
+    + '<div class="quiz-ask">这句里的「' + esc(q.word) + '」是什么意思？</div>'
+    + '</div>'
+    + '<div class="quiz-opts">' + options + '</div>'
+    + feedback;
+}
+
 function renderReview() {
+  if (state.mode === 'quiz') { renderQuiz(); return; }
   if (state.lastGraded) { renderAnswer(); return; }
   const card = currentCard();
   if (!card) {
@@ -424,7 +515,7 @@ function renderReview() {
   const peeked = state.peekedId === card.id;
   const leech = (card.lapses || 0) >= LEECH_LAPSES
     ? '<span class="leech">难词 ×' + esc(String(card.lapses)) + '</span>' : '';
-  view.innerHTML = renderProgress()
+  view.innerHTML = renderModeSwitch() + renderProgress()
     + '<div class="review-card" data-action="peek">'
     + '<span class="badge">' + esc((card.tags && card.tags[0]) || (card.state === 'new' ? '新词' : '复习')) + leech + '</span>'
     + '<div class="word">' + esc(card.word) + '</div>'
@@ -446,6 +537,16 @@ function renderReview() {
     + (state.lastUndo ? ' · <button class="inline-link" data-action="undo" type="button">撤销上一张</button>' : '') + '</div>';
 }
 
+/** 老收藏没存释义，按例句反查一次 */
+function lookupDefByExample(f) {
+  const card = state.cards.get(f.cardId);
+  if (!card) return '';
+  for (const s of card.senses || []) {
+    if (senseExamples(s).some((e) => e.text === f.text)) return s.def || '';
+  }
+  return '';
+}
+
 function renderFavs() {
   if (!state.favs.length) {
     view.innerHTML = '<div class="empty"><strong>还没有收藏的例句</strong>背词时，每条例句左边有个 ☆，点一下就把这句收进来，方便集中回看。</div>';
@@ -454,6 +555,8 @@ function renderFavs() {
   view.innerHTML = '<div class="section" style="padding:12px 14px">共 ' + state.favs.length + ' 条例句收藏</div>'
     + state.favs.map((f, i) => '<div class="row"><div class="row-main">'
       + '<div class="row-word">' + esc(f.word || '') + '</div>'
+      + '<div class="fav-def">' + (f.pos ? '<span class="sense-pos">' + esc(f.pos) + '</span>' : '')
+      + esc(f.def || lookupDefByExample(f) || '（这条收藏没有释义，可在卡片里重新收藏）') + '</div>'
       + '<div class="fav-ex">' + esc(f.text) + (f.source ? ' <span class="src">—— ' + esc(f.source) + '</span>' : '') + '</div>'
       + (f.translation ? '<div class="row-sub">' + esc(f.translation) + '</div>' : '')
       + '</div><button class="btn" data-action="unfav" data-fi="' + i + '" type="button">取消</button></div>').join('');
@@ -835,7 +938,7 @@ if (view) {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const action = el.dataset.action;
-    if (action === 'grade' || action === 'master' || action === 'speak' || action === 'speak-answer' || action === 'next-card' || action === 'bury' || action === 'fav') e.stopPropagation();
+    if (['grade', 'master', 'speak', 'speak-answer', 'next-card', 'bury', 'fav', 'mode', 'answer', 'next-quiz'].indexOf(action) >= 0) e.stopPropagation();
     if (action === 'peek') {
       const c = currentCard();
       if (c) { state.peekedId = c.id; render(); }
@@ -843,12 +946,31 @@ if (view) {
     }
     if (action === 'unpeek') { state.peekedId = null; render(); return; }
     if (action === 'undo') { await undoLast(); return; }
+    if (action === 'mode') {
+      state.mode = el.dataset.m === 'quiz' ? 'quiz' : 'review';
+      state.quiz = { q: null, picked: null, n: 0 };
+      state.lastGraded = null;
+      state.peekedId = null;
+      render();
+      return;
+    }
+    if (action === 'answer') {
+      if (state.quiz.picked !== null) return;
+      state.quiz.picked = Number(el.dataset.i);
+      render();
+      return;
+    }
+    if (action === 'next-quiz') {
+      state.quiz = { q: null, picked: null, n: (state.quiz.n || 0) + 1 };
+      render();
+      return;
+    }
     if (action === 'bury') { const c = currentCard(); if (c) await buryCard(c.id); return; }
     if (action === 'fav') {
       const card = state.cards.get(el.dataset.id);
       const s = card && card.senses ? card.senses[Number(el.dataset.si)] : null;
       const ex = s ? senseExamples(s)[Number(el.dataset.ei)] : null;
-      if (card && ex) await toggleFav(card, ex);
+      if (card && ex) await toggleFav(card, ex, s);
       return;
     }
     if (action === 'unfav') {
