@@ -106,9 +106,39 @@ async function ensureDeck() {
   }
 }
 
+/** 词库格式的卡片没有复习状态字段；补齐它，否则队列会整片空掉 */
+function normalizeCard(c, now = Date.now()) {
+  const base = newCardState(now);
+  const out = { ...c };
+  let changed = false;
+  if (!out.bucket) { out.bucket = 'active'; changed = true; }
+  if (!out.state) { out.state = base.state; changed = true; }
+  if (typeof out.step !== 'number') { out.step = base.step; changed = true; }
+  if (typeof out.ef !== 'number') { out.ef = base.ef; changed = true; }
+  if (typeof out.interval !== 'number') { out.interval = base.interval; changed = true; }
+  if (typeof out.due !== 'number') { out.due = now; changed = true; }
+  if (typeof out.reps !== 'number') { out.reps = 0; changed = true; }
+  if (typeof out.lapses !== 'number') { out.lapses = 0; changed = true; }
+  if (!out.origin) { out.origin = 'builtin'; changed = true; }
+  if (typeof out.createdAt !== 'number') { out.createdAt = now; changed = true; }
+  if (typeof out.masteredAt !== 'number') { out.masteredAt = 0; changed = true; }
+  if (!Array.isArray(out.senses)) { out.senses = []; changed = true; }
+  return { card: out, changed };
+}
+
 async function loadAll() {
   const all = await db.getAllCards();
-  state.cards = new Map(all.map((c) => [c.id, c]));
+  const healed = [];
+  state.cards = new Map();
+  all.forEach((raw) => {
+    const { card, changed } = normalizeCard(raw);
+    state.cards.set(card.id, card);
+    if (changed) healed.push(card);
+  });
+  if (healed.length) {
+    db.putCards(healed).catch(() => {});
+    console.warn('已修复 ' + healed.length + ' 张缺少复习状态的卡片');
+  }
   const settings = await db.getMeta('settings', null);
   state.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
   state.streak = (await db.getMeta('streak', null)) || { lastDate: '', count: 0 };
@@ -749,6 +779,15 @@ async function importAll(file) {
     const text = await file.text();
     const data = JSON.parse(text);
     if (!data || !Array.isArray(data.cards)) throw new Error('文件格式不对');
+
+    // 闸门：词库文件（deck）不是备份。它只有词条内容、没有复习状态，
+    // 直接导入会清空进度、并把队列搞空，所以这里必须拦住。
+    const isDeck = !data.app || !data.cards.every((c) => c && c.state && c.bucket);
+    if (isDeck) {
+      bootError('这不是备份文件，是词库文件。词库会自动更新，不需要导入；'
+        + '如果你要恢复自己的复习进度，请在「设置 → 导出 JSON」生成的那个文件里再导入。');
+      return;
+    }
     await db.clearAll();
     await db.putCards(data.cards);
     if (data.settings) await db.setMeta('settings', data.settings);

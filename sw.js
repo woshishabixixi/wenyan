@@ -7,7 +7,7 @@
  *  - 预缓存逐条 try/catch：某个文件暂缺（例如还没生成）不能拖垮整个安装。
  */
 
-const CACHE_VERSION = 'wenyan-v22';
+const CACHE_VERSION = 'wenyan-v23';
 const CACHE_PREFIX = 'wenyan-';
 
 const CORE_ASSETS = [
