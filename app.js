@@ -2,7 +2,7 @@ import { GRADES, schedule, newCardState, describeInterval, buildQueue } from './
 import * as db from './db.js';
 
 const DECK_URL = './data/deck.builtin.json';
-const APP_VERSION = 'v34'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
+const APP_VERSION = 'v36'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
 const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4, lessMotion: false, soundOn: true, soundStyle: 'random' };
 const RELEARN_GAP_MIN = 3;   // 硬下限：模糊/不认识的词至少隔 3 张才回来
 const RELEARN_GAP_MAX = 10;
@@ -29,7 +29,8 @@ const state = {
   right: [],
   favView: 'favs',
   mode: 'review',
-  quiz: { q: null, picked: null, n: 0, streak: 0, best: 0, milestone: '' },
+  quiz: { q: null, picked: null, n: 0, streak: 0, best: 0, milestone: '', banner: '' },
+  combo: { best: 0, s3: 0, s5: 0, s10: 0, totalRight: 0 },
   search: '',
   editor: null,
   batch: '',
@@ -150,6 +151,7 @@ async function loadAll() {
   state.newDone = (await db.getMeta('newDone', null)) || { date: '', count: 0 };
   state.today = (await db.getMeta('todayStats', null)) || { date: '', again: 0, hard: 0, good: 0 };
   state.favs = (await db.getMeta('favs', null)) || [];
+  state.combo = (await db.getMeta('combo', null)) || { best: 0, s3: 0, s5: 0, s10: 0, totalRight: 0 };
   state.right = (await db.getMeta('quizRight', null)) || [];
 }
 
@@ -718,8 +720,9 @@ function renderQuiz() {
   view.innerHTML = renderModeSwitch()
     + '<div class="review-card is-answered is-quiz">'
     + '<span class="badge">例句填空 · 第 ' + ((state.quiz.n || 0) + 1) + ' 题'
-    + ((state.quiz.streak || 0) >= 2 ? ' <b class="combo" data-lv="' + ((state.quiz.streak >= 10) ? 4 : (state.quiz.streak >= 5) ? 3 : (state.quiz.streak >= 3) ? 2 : 1) + '">连对 ×' + state.quiz.streak + '</b>' : '')
+    + ' <b class="combo" data-lv="' + ((state.quiz.streak >= 10) ? 4 : (state.quiz.streak >= 5) ? 3 : (state.quiz.streak >= 3) ? 2 : (state.quiz.streak >= 1) ? 1 : 0) + '">连对 ×' + (state.quiz.streak || 0) + '</b>'
     + '</span>'
+    + (state.quiz.banner ? '<div class="combo-banner">' + esc(state.quiz.banner) + '</div>' : '')
     + '<div class="quiz-ex">' + exText + '</div>'
     + '<div class="quiz-ask">这句里的「' + esc(q.word) + '」是什么意思？</div>'
     + '</div>'
@@ -969,6 +972,16 @@ function renderSettings() {
     + '音效：' + esc(soundLabel()) + '</button></div>'
     + '<p class="sub" style="margin-top:8px">音效是现场算出来的，不占体积。点按钮循环切换：随机 → 古琴 → 风铃 → 木鱼 → 关。默认随机（每次答对换一种音色和音高）。</p>'
     + '<p class="sub" style="margin-top:10px">默认一定会放动画。如果觉得晃眼，点「减弱动画」改为静态提示。</p></div>'
+    + '<div class="section"><h2>连对成就</h2>'
+    + '<p class="sub">连对只在「例句填空」里算：连续答对不断累加，答错清零。'
+    + '3 / 5 / 10 连会额外触发金环、低音长拨和横幅。</p>'
+    + '<div class="combo-grid">'
+    + '<div><span>历史最高</span><b>' + (state.combo.best || 0) + '</b></div>'
+    + '<div><span>三连次数</span><b>' + (state.combo.s3 || 0) + '</b></div>'
+    + '<div><span>五连次数</span><b>' + (state.combo.s5 || 0) + '</b></div>'
+    + '<div><span>十连次数</span><b>' + (state.combo.s10 || 0) + '</b></div>'
+    + '<div><span>累计答对</span><b>' + (state.combo.totalRight || 0) + '</b></div>'
+    + '</div></div>'
     + '<div class="section"><h2>今天</h2>'
     + '<p class="sub">已复习 ' + reviewedToday() + ' 张 · 认识 ' + t.good + ' · 模糊 ' + t.hard + ' · 不认识 ' + t.again
     + ' · 本次最高连对 ' + (state.quiz.best || 0) + '</p></div>'
@@ -1230,11 +1243,25 @@ if (view) {
         state.quiz.milestone = state.quiz.streak >= 10 ? '十连·登峰'
           : state.quiz.streak >= 5 ? '五连·通神'
           : state.quiz.streak >= 3 ? '三连·稳' : '';
+
+        const c = { ...state.combo };
+        c.totalRight = (c.totalRight || 0) + 1;
+        if (state.quiz.streak > (c.best || 0)) c.best = state.quiz.streak;
+        let banner = '';
+        if (state.quiz.streak === 3) { c.s3 = (c.s3 || 0) + 1; banner = '🏅 三连达成 · 已记入成就'; }
+        if (state.quiz.streak === 5) { c.s5 = (c.s5 || 0) + 1; banner = '🏅 五连通神 · 已记入成就'; }
+        if (state.quiz.streak === 10) { c.s10 = (c.s10 || 0) + 1; banner = '🏅 十连登峰 · 已记入成就'; }
+        state.combo = c;
+        state.quiz.banner = banner;
+        await db.setMeta('combo', c);
       } else {
         state.quiz.streak = 0;
         state.quiz.milestone = '';
       }
       render();
+      if (state.quiz.banner) {
+        setTimeout(() => { if (state.quiz.banner) { state.quiz.banner = ''; render(); } }, 2400);
+      }
       if (right) {
         const s = state.quiz.streak;
         const level = s >= 10 ? 4 : s >= 5 ? 3 : s >= 3 ? 2 : 1;
@@ -1244,7 +1271,17 @@ if (view) {
       return;
     }
     if (action === 'next-quiz') {
-      state.quiz = { q: null, picked: null, n: (state.quiz.n || 0) + 1 };
+      // 注意：换题不能把连对计数清掉，否则连对永远到不了 2
+      const prev = state.quiz || {};
+      state.quiz = {
+        q: null,
+        picked: null,
+        n: (prev.n || 0) + 1,
+        streak: prev.streak || 0,
+        best: prev.best || 0,
+        milestone: '',
+        banner: '',
+      };
       render();
       return;
     }
