@@ -2,8 +2,8 @@ import { GRADES, schedule, newCardState, describeInterval, buildQueue } from './
 import * as db from './db.js';
 
 const DECK_URL = './data/deck.builtin.json';
-const APP_VERSION = 'v32'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
-const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4, lessMotion: false, soundOn: true };
+const APP_VERSION = 'v34'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
+const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4, lessMotion: false, soundOn: true, soundStyle: 'random' };
 const RELEARN_GAP_MIN = 3;   // 硬下限：模糊/不认识的词至少隔 3 张才回来
 const RELEARN_GAP_MAX = 10;
 
@@ -29,7 +29,7 @@ const state = {
   right: [],
   favView: 'favs',
   mode: 'review',
-  quiz: { q: null, picked: null, n: 0, streak: 0 },
+  quiz: { q: null, picked: null, n: 0, streak: 0, best: 0, milestone: '' },
   search: '',
   editor: null,
   batch: '',
@@ -495,50 +495,151 @@ const QUIZ_WINS = [
   { char: '雅', text: '文言通了', color: '#9a3412', anim: 'wobble' },
   { char: '过', text: '轻舟已过', color: '#0f766e', anim: 'drift' },
   { char: '绝', text: '漂亮，继续', color: '#0f766e', anim: 'burst' },
+  { char: '佳', text: '答得妙', color: '#0f766e', anim: 'sweepIn' },
+  { char: '达', text: '通了', color: '#0f766e', anim: 'dropStamp' },
+  { char: '真', text: '真知道', color: '#b45309', anim: 'paperFlip' },
+  { char: '神', text: '神了', color: '#9a3412', anim: 'inkBloom' },
+  { char: '清', text: '清清楚楚', color: '#1d4ed8', anim: 'arcIn' },
+  { char: '远', text: '记得牢', color: '#0f766e', anim: 'shakeHit' },
+  { char: '知', text: '知道了', color: '#0f766e', anim: 'sweepIn' },
+  { char: '成', text: '成了', color: '#b45309', anim: 'dropStamp' },
+  { char: '上', text: '又进一分', color: '#0f766e', anim: 'arcIn' },
+  { char: '明', text: '明明白白', color: '#1d4ed8', anim: 'inkBloom' },
 ];
 
-/** 现场合成的音效：青铜铃 / 铜锣 / 翻纸，不加载任何音频文件 */
+/** 现场合成的音效，不加载任何音频文件 */
 let audioCtx = null;
+let reverbNode = null;
+
+function getAudio() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  if (!audioCtx) audioCtx = new Ctx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+/** 合成一段短混响脉冲响应（指数衰减噪声），让拨弦有空间感 */
+function getReverb(ctx) {
+  if (reverbNode) return reverbNode;
+  const len = Math.floor(ctx.sampleRate * 1.1);
+  const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch += 1) {
+    const d = ir.getChannelData(ch);
+    for (let i = 0; i < len; i += 1) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2);
+  }
+  const conv = ctx.createConvolver();
+  conv.buffer = ir;
+  const wet = ctx.createGain();
+  wet.gain.value = 0.22;
+  conv.connect(wet); wet.connect(ctx.destination);
+  reverbNode = conv;
+  return conv;
+}
+
+/** 古琴拨弦：Karplus-Strong 物理建模 */
+function pluck(ctx, freq, when, gain, dur) {
+  const sr = ctx.sampleRate;
+  const N = Math.max(2, Math.round(sr / freq));
+  const total = Math.floor(sr * (dur || 1.4));
+  const buf = ctx.createBuffer(1, total, sr);
+  const d = buf.getChannelData(0);
+
+  const ring = new Float32Array(N);
+  for (let i = 0; i < N; i += 1) ring[i] = Math.random() * 2 - 1;
+  let idx = 0;
+  for (let i = 0; i < total; i += 1) {
+    const cur = ring[idx];
+    const nxt = ring[(idx + 1) % N];
+    d[i] = cur;
+    ring[idx] = 0.4985 * (cur + nxt);
+    idx = (idx + 1) % N;
+  }
+
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(gain, when);
+  env.gain.exponentialRampToValueAtTime(0.0001, when + (dur || 1.4));
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = Math.min(6000, freq * 6);
+  src.connect(lp); lp.connect(env); env.connect(ctx.destination);
+  try { env.connect(getReverb(ctx)); } catch (err) { /* 混响失败不影响主音 */ }
+  src.start(when);
+}
+
+const SOUND_STYLES = [
+  { id: 'random', label: '随机' },
+  { id: 'guqin', label: '古琴' },
+  { id: 'chime', label: '风铃' },
+  { id: 'wood', label: '木鱼' },
+  { id: 'off', label: '关' },
+];
+const RANDOM_SOUNDS = ['guqin', 'chime', 'wood'];
+const PITCH_POOL = [196, 220, 246.94, 261.63, 293.66, 329.63];
+
+function soundLabel() {
+  if (state.settings.soundOn === false) return '关';
+  const s = SOUND_STYLES.find((x) => x.id === (state.settings.soundStyle || 'random'));
+  return s ? s.label : '随机';
+}
+
+/** 柔和的正弦音（风铃用）：快起、指数衰减、送混响 */
+function softTone(ctx, freq, when, gain, dur) {
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(freq, when);
+  g.gain.setValueAtTime(0.0001, when);
+  g.gain.exponentialRampToValueAtTime(gain, when + 0.015);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+  o.connect(g); g.connect(ctx.destination);
+  try { g.connect(getReverb(ctx)); } catch (err) { /* ignore */ }
+  o.start(when); o.stop(when + dur + 0.05);
+}
+
+/** 木鱼：极短带通噪声 */
+function woodHit(ctx, when, big) {
+  const len = Math.floor(ctx.sampleRate * (big ? 0.2 : 0.12));
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i += 1) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 9);
+  const src = ctx.createBufferSource();
+  const f = ctx.createBiquadFilter();
+  const g = ctx.createGain();
+  f.type = 'bandpass';
+  f.frequency.value = big ? 620 : 880;
+  f.Q.value = 6;
+  g.gain.value = big ? 0.5 : 0.34;
+  src.buffer = buf; src.connect(f); f.connect(g); g.connect(ctx.destination);
+  src.start(when);
+}
+
 function playSound(kind) {
-  if (!state.settings.soundOn) return;
+  if (state.settings.soundOn === false) return;
+  const ctx = getAudio();
+  if (!ctx) return;
   try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    audioCtx = audioCtx || new Ctx();
-    const ctx = audioCtx;
-    if (ctx.state === 'suspended') ctx.resume();
-    const t = ctx.currentTime;
+    const t = ctx.currentTime + 0.01;
+    const big = kind === 'gong';
+    let style = state.settings.soundStyle || 'random';
+    if (style === 'random') style = RANDOM_SOUNDS[Math.floor(Math.random() * RANDOM_SOUNDS.length)];
+    const pitch = PITCH_POOL[Math.floor(Math.random() * PITCH_POOL.length)];
 
-    const tone = (freq, gain, dur, type) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = type || 'sine';
-      o.frequency.value = freq;
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(gain, t + 0.012);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      o.connect(g); g.connect(ctx.destination);
-      o.start(t); o.stop(t + dur + 0.05);
-    };
-
-    if (kind === 'bell') {
-      tone(1046.5, 0.16, 0.9); tone(1568, 0.07, 0.7); tone(2093, 0.04, 0.45);
-    } else if (kind === 'gong') {
-      tone(196, 0.22, 1.6, 'triangle'); tone(294, 0.12, 1.3); tone(392, 0.06, 1.0);
-    } else if (kind === 'page') {
-      const len = Math.floor(ctx.sampleRate * 0.18);
-      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < len; i += 1) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
-      const src = ctx.createBufferSource();
-      const g = ctx.createGain();
-      const f = ctx.createBiquadFilter();
-      f.type = 'bandpass'; f.frequency.value = 2200; f.Q.value = 0.8;
-      g.gain.value = 0.12;
-      src.buffer = buf; src.connect(f); f.connect(g); g.connect(ctx.destination);
-      src.start(t);
+    if (style === 'guqin') {
+      const base = big ? pitch / 1.5 : pitch;
+      pluck(ctx, base, t, 0.42, big ? 2.6 : 1.7);
+      pluck(ctx, base * 1.5, t + 0.07, 0.24, big ? 2.0 : 1.3);
+      if (big) pluck(ctx, base * 2, t + 0.14, 0.16, 1.7);
+    } else if (style === 'chime') {
+      const tones = big ? [pitch * 2, pitch * 3, pitch * 4] : [pitch * 2, pitch * 3];
+      tones.forEach((f, i) => softTone(ctx, f, t + i * 0.055, (big ? 0.14 : 0.11) / (i + 1), big ? 1.7 : 1.15));
+    } else if (style === 'wood') {
+      woodHit(ctx, t, big);
+      if (big) woodHit(ctx, t + 0.16, false);
     }
-  } catch (err) { /* 音频被系统拦下就静默 */ }
+  } catch (err) { /* 系统拦下音频就静默 */ }
 }
 
 function playWin(force = false, level = 1, streak = 1) {
@@ -562,7 +663,7 @@ function playWin(force = false, level = 1, streak = 1) {
       + '--d:' + (Math.random() * 0.12).toFixed(2) + 's"></i>';
   }
 
-  const streakText = level >= 3 ? '五连·通神' : level === 2 ? '三连·稳' : '';
+  const streakText = level >= 4 ? '十连·登峰' : level >= 3 ? '五连·通神' : level === 2 ? '三连·稳' : '';
   box.innerHTML = '<div class="win-card">'
     + '<div class="win-paper">'
     + '<div class="win-char">' + esc(v.char) + '</div>'
@@ -616,7 +717,9 @@ function renderQuiz() {
 
   view.innerHTML = renderModeSwitch()
     + '<div class="review-card is-answered is-quiz">'
-    + '<span class="badge">例句填空 · 第 ' + ((state.quiz.n || 0) + 1) + ' 题</span>'
+    + '<span class="badge">例句填空 · 第 ' + ((state.quiz.n || 0) + 1) + ' 题'
+    + ((state.quiz.streak || 0) >= 2 ? ' <b class="combo" data-lv="' + ((state.quiz.streak >= 10) ? 4 : (state.quiz.streak >= 5) ? 3 : (state.quiz.streak >= 3) ? 2 : 1) + '">连对 ×' + state.quiz.streak + '</b>' : '')
+    + '</span>'
     + '<div class="quiz-ex">' + exText + '</div>'
     + '<div class="quiz-ask">这句里的「' + esc(q.word) + '」是什么意思？</div>'
     + '</div>'
@@ -862,11 +965,13 @@ function renderSettings() {
     + '<div class="actions"><button class="btn" data-action="preview-win" type="button">预览答对动画</button>'
     + '<button class="btn' + (state.settings.lessMotion ? ' primary' : '') + '" data-action="toggle-motion" type="button">'
     + (state.settings.lessMotion ? '已关闭动画（点此打开）' : '减弱动画') + '</button>'
-    + '<button class="btn' + (state.settings.soundOn === false ? '' : ' primary') + '" data-action="toggle-sound" type="button">'
-    + (state.settings.soundOn === false ? '音效已关（点此打开）' : '音效开') + '</button></div>'
+    + '<button class="btn' + (state.settings.soundOn === false ? '' : ' primary') + '" data-action="cycle-sound" type="button">'
+    + '音效：' + esc(soundLabel()) + '</button></div>'
+    + '<p class="sub" style="margin-top:8px">音效是现场算出来的，不占体积。点按钮循环切换：随机 → 古琴 → 风铃 → 木鱼 → 关。默认随机（每次答对换一种音色和音高）。</p>'
     + '<p class="sub" style="margin-top:10px">默认一定会放动画。如果觉得晃眼，点「减弱动画」改为静态提示。</p></div>'
     + '<div class="section"><h2>今天</h2>'
-    + '<p class="sub">已复习 ' + reviewedToday() + ' 张 · 认识 ' + t.good + ' · 模糊 ' + t.hard + ' · 不认识 ' + t.again + '</p></div>'
+    + '<p class="sub">已复习 ' + reviewedToday() + ' 张 · 认识 ' + t.good + ' · 模糊 ' + t.hard + ' · 不认识 ' + t.again
+    + ' · 本次最高连对 ' + (state.quiz.best || 0) + '</p></div>'
     + '<div class="section"><h2>未来 7 天到期</h2><p class="sub">这些卡会在对应那天排进复习队列。</p>' + renderForecast() + '</div>'
     + '<div class="section"><h2>每日新词上限</h2>'
     + '<p class="sub">每天最多引入多少张新卡。学过的旧卡不受此限制，到点就会排进队列。</p>'
@@ -1114,13 +1219,25 @@ if (view) {
       if (right) {
         await markRight(q);
         state.quiz.streak = (state.quiz.streak || 0) + 1;
+        if (state.quiz.streak > (state.quiz.best || 0)) {
+          state.quiz.best = state.quiz.streak;
+          const today = dayKey();
+          const rec = (await db.getMeta('comboBest', null)) || { date: '', best: 0 };
+          if (rec.date !== today || state.quiz.best > rec.best) {
+            await db.setMeta('comboBest', { date: today, best: Math.max(rec.best, state.quiz.best) });
+          }
+        }
+        state.quiz.milestone = state.quiz.streak >= 10 ? '十连·登峰'
+          : state.quiz.streak >= 5 ? '五连·通神'
+          : state.quiz.streak >= 3 ? '三连·稳' : '';
       } else {
         state.quiz.streak = 0;
+        state.quiz.milestone = '';
       }
       render();
       if (right) {
         const s = state.quiz.streak;
-        const level = s >= 5 ? 3 : s >= 3 ? 2 : 1;
+        const level = s >= 10 ? 4 : s >= 5 ? 3 : s >= 3 ? 2 : 1;
         playSound(level >= 3 ? 'gong' : 'bell');
         playWin(false, level, s);
       }
@@ -1140,12 +1257,15 @@ if (view) {
       return;
     }
     if (action === 'preview-win') { playSound('bell'); playWin(true, 1, 1); return; }
-    if (action === 'toggle-sound') {
-      state.settings = { ...state.settings, soundOn: state.settings.soundOn === false };
+    if (action === 'cycle-sound') {
+      const cur = state.settings.soundOn === false ? 'off' : (state.settings.soundStyle || 'guqin');
+      const i = SOUND_STYLES.findIndex((s) => s.id === cur);
+      const next = SOUND_STYLES[(i + 1) % SOUND_STYLES.length].id;
+      state.settings = { ...state.settings, soundOn: next !== 'off', soundStyle: next === 'off' ? (state.settings.soundStyle || 'guqin') : next };
       await db.setMeta('settings', state.settings);
       render();
-      toast(state.settings.soundOn === false ? '音效已关闭' : '音效已打开');
-      if (state.settings.soundOn !== false) playSound('bell');
+      toast('音效：' + soundLabel());
+      if (next !== 'off') playSound('bell');
       return;
     }
     if (action === 'toggle-motion') {
