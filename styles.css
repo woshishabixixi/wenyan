@@ -535,3 +535,7 @@ html, body {
   .win-card { animation: none; opacity: 1; }
   .win-dots i { animation: none; opacity: 0; }
 }
+/* 系统开了「减弱动态效果」时：不放动画，但仍然显示庆祝卡片 */
+.win-burst.is-static .win-card { animation: none; opacity: 1; }
+.win-burst.is-static .win-dots { display: none; }
+.win-burst.is-static { background: rgba(250, 247, 242, 0.72); }

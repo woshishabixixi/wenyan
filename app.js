@@ -2,6 +2,7 @@ import { GRADES, schedule, newCardState, describeInterval, buildQueue } from './
 import * as db from './db.js';
 
 const DECK_URL = './data/deck.builtin.json';
+const APP_VERSION = 'v29'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
 const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4 };
 const RELEARN_GAP_MIN = 3;   // 硬下限：模糊/不认识的词至少隔 3 张才回来
 const RELEARN_GAP_MAX = 10;
@@ -496,14 +497,15 @@ const QUIZ_WINS = [
   { emoji: '💯', text: '漂亮，继续', color: '#0f766e' },
 ];
 
-function playWin() {
+function playWin(force = false) {
+  let reduced = false;
   try {
-    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  } catch (err) { /* 忽略 */ }
+    reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (err) { reduced = false; }
 
   const v = QUIZ_WINS[Math.floor(Math.random() * QUIZ_WINS.length)];
   const box = document.createElement('div');
-  box.className = 'win-burst';
+  box.className = 'win-burst' + (reduced && !force ? ' is-static' : '');
   box.style.setProperty('--win-color', v.color);
 
   let dots = '';
@@ -517,7 +519,7 @@ function playWin() {
     + '<div class="win-text">' + esc(v.text) + '</div></div>'
     + '<div class="win-dots">' + dots + '</div>';
   document.body.appendChild(box);
-  setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, 1500);
+  setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, reduced && !force ? 1100 : 1500);
 }
 
 async function markRight(q) {
@@ -801,7 +803,11 @@ function renderSettings() {
     if (el) el.textContent = '共 ' + n.total + ' 条 · 在学 ' + n.active + ' · 已掌握 ' + n.mastered;
   }).catch(() => {});
   const t = state.today.date === dayKey() ? state.today : { again: 0, hard: 0, good: 0 };
-  view.innerHTML = '<div class="section"><h2>今天</h2>'
+  view.innerHTML = '<div class="section"><h2>关于</h2>'
+    + '<p class="sub">界面版本 <b>' + esc(APP_VERSION) + '</b> · 词库 ' + esc(String(state.cards.size || 0)) + ' 条'
+    + '。如果答题后没看到答对动画，先点下面这个按钮试一下。</p>'
+    + '<div class="actions"><button class="btn" data-action="preview-win" type="button">预览答对动画</button></div></div>'
+    + '<div class="section"><h2>今天</h2>'
     + '<p class="sub">已复习 ' + reviewedToday() + ' 张 · 认识 ' + t.good + ' · 模糊 ' + t.hard + ' · 不认识 ' + t.again + '</p></div>'
     + '<div class="section"><h2>未来 7 天到期</h2><p class="sub">这些卡会在对应那天排进复习队列。</p>' + renderForecast() + '</div>'
     + '<div class="section"><h2>每日新词上限</h2>'
@@ -1064,6 +1070,7 @@ if (view) {
       if (card && ex) await toggleFav(card, ex, s);
       return;
     }
+    if (action === 'preview-win') { playWin(true); return; }
     if (action === 'fav-view') {
       state.favView = el.dataset.v === 'right' ? 'right' : 'favs';
       render();
