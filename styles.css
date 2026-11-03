@@ -613,3 +613,83 @@ html, body {
 .win-burst.is-static .win-card { animation: none; opacity: 1; }
 .win-burst.is-static .win-dots { display: none; }
 .win-burst.is-static { background: rgba(250, 247, 242, 0.72); }
+/* ===== 古风答对动画：毛笔字 + 朱印 + 墨点 ===== */
+.win-paper {
+  position: relative;
+  width: 210px;
+  height: 210px;
+  margin: 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(250, 247, 242, 0.96) 0%, rgba(250, 247, 242, 0.55) 62%, rgba(250, 247, 242, 0) 78%);
+}
+.win-char {
+  font-family: "STKaiti", "KaiTi", "Kaiti SC", "楷体", "Songti SC", "SimSun", serif;
+  font-size: 132px;
+  line-height: 1;
+  color: #1f2933;
+  transform: rotate(-5deg);
+  text-shadow: 0 3px 18px rgba(31, 41, 51, 0.18), 0 0 2px rgba(31, 41, 51, 0.35);
+}
+.win-seal {
+  position: absolute;
+  right: 6px;
+  bottom: 12px;
+  width: 50px;
+  height: 50px;
+  border: 3px solid #b91c1c;
+  border-radius: 6px;
+  color: #b91c1c;
+  font-family: "STKaiti", "KaiTi", serif;
+  font-size: 26px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  transform: rotate(-10deg);
+  background: rgba(255, 255, 255, 0.72);
+  animation: sealStamp 0.55s cubic-bezier(0.2, 1.6, 0.4, 1) 0.22s both;
+}
+@keyframes sealStamp {
+  0%   { opacity: 0; transform: scale(1.9) rotate(-24deg); }
+  60%  { opacity: 1; transform: scale(0.9) rotate(-8deg); }
+  80%  { transform: scale(1.04) rotate(-11deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-10deg); }
+}
+.win-ink { position: absolute; inset: 0; pointer-events: none; }
+.win-ink i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--sz, 8px);
+  height: var(--sz, 8px);
+  margin: calc(var(--sz, 8px) / -2) 0 0 calc(var(--sz, 8px) / -2);
+  border-radius: 50%;
+  background: rgba(31, 41, 51, 0.82);
+  opacity: 0;
+  animation: inkSplash 0.75s cubic-bezier(0.1, 0.8, 0.3, 1) var(--d, 0s) both;
+}
+@keyframes inkSplash {
+  0%   { opacity: 0.95; transform: translate(0, 0) scale(0.3); }
+  70%  { opacity: 0.7; }
+  100% { opacity: 0; transform: translate(var(--dx, 0), var(--dy, 0)) scale(1); }
+}
+/* 连对等级：3 连起加金环与更艳的印 */
+.win-burst.lv2 .win-char { font-size: 142px; }
+.win-burst.lv2 .win-seal { width: 56px; height: 56px; border-color: #c2410c; color: #c2410c; }
+.win-burst.lv3 .win-char { font-size: 152px; color: #7c2d12; }
+.win-burst.lv3 .win-seal { width: 60px; height: 60px; border-color: #b91c1c; color: #b91c1c; box-shadow: 0 0 0 2px rgba(185, 28, 28, 0.18); }
+.win-burst.lv3 .win-paper::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 2px solid rgba(217, 119, 6, 0.55);
+  animation: goldRing 0.9s ease-out 0.1s both;
+}
+@keyframes goldRing {
+  0%   { opacity: 0; transform: scale(0.6); }
+  45%  { opacity: 0.9; transform: scale(1.06); }
+  100% { opacity: 0; transform: scale(1.25); }
+}
+.win-text { margin-top: 6px; }

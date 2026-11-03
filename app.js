@@ -2,8 +2,8 @@ import { GRADES, schedule, newCardState, describeInterval, buildQueue } from './
 import * as db from './db.js';
 
 const DECK_URL = './data/deck.builtin.json';
-const APP_VERSION = 'v31'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
-const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4, lessMotion: false };
+const APP_VERSION = 'v32'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
+const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4, lessMotion: false, soundOn: true };
 const RELEARN_GAP_MIN = 3;   // 硬下限：模糊/不认识的词至少隔 3 张才回来
 const RELEARN_GAP_MAX = 10;
 
@@ -29,7 +29,7 @@ const state = {
   right: [],
   favView: 'favs',
   mode: 'review',
-  quiz: { q: null, picked: null, n: 0 },
+  quiz: { q: null, picked: null, n: 0, streak: 0 },
   search: '',
   editor: null,
   batch: '',
@@ -485,45 +485,92 @@ function buildQuiz() {
 
 /** 答对时的庆祝动画：10 套随机文案 + 配色，答完即散，不挡操作 */
 const QUIZ_WINS = [
-  { emoji: '🎉', text: '答对了！', color: '#0f766e', anim: 'pop' },
-  { emoji: '✨', text: '漂亮！', color: '#b45309', anim: 'swing' },
-  { emoji: '👏', text: '一字不差', color: '#0f766e', anim: 'slideUp' },
-  { emoji: '🔥', text: '稳！', color: '#c2410c', anim: 'bounce' },
-  { emoji: '🎯', text: '正中靶心', color: '#0f766e', anim: 'zoomIn' },
-  { emoji: '📖', text: '记住了', color: '#1d4ed8', anim: 'flip' },
-  { emoji: '⭐', text: '这题满分', color: '#b45309', anim: 'spin' },
-  { emoji: '🏮', text: '文言通了', color: '#9a3412', anim: 'wobble' },
-  { emoji: '🍃', text: '轻舟已过', color: '#0f766e', anim: 'drift' },
-  { emoji: '💯', text: '漂亮，继续', color: '#0f766e', anim: 'burst' },
+  { char: '善', text: '答对了', color: '#0f766e', anim: 'pop' },
+  { char: '妙', text: '漂亮', color: '#b45309', anim: 'swing' },
+  { char: '通', text: '一字不差', color: '#0f766e', anim: 'slideUp' },
+  { char: '稳', text: '稳', color: '#c2410c', anim: 'bounce' },
+  { char: '准', text: '正中靶心', color: '#0f766e', anim: 'zoomIn' },
+  { char: '记', text: '记住了', color: '#1d4ed8', anim: 'flip' },
+  { char: '满', text: '这题满分', color: '#b45309', anim: 'spin' },
+  { char: '雅', text: '文言通了', color: '#9a3412', anim: 'wobble' },
+  { char: '过', text: '轻舟已过', color: '#0f766e', anim: 'drift' },
+  { char: '绝', text: '漂亮，继续', color: '#0f766e', anim: 'burst' },
 ];
 
-function playWin(force = false) {
+/** 现场合成的音效：青铜铃 / 铜锣 / 翻纸，不加载任何音频文件 */
+let audioCtx = null;
+function playSound(kind) {
+  if (!state.settings.soundOn) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    audioCtx = audioCtx || new Ctx();
+    const ctx = audioCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+    const t = ctx.currentTime;
+
+    const tone = (freq, gain, dur, type) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = type || 'sine';
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(gain, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(t); o.stop(t + dur + 0.05);
+    };
+
+    if (kind === 'bell') {
+      tone(1046.5, 0.16, 0.9); tone(1568, 0.07, 0.7); tone(2093, 0.04, 0.45);
+    } else if (kind === 'gong') {
+      tone(196, 0.22, 1.6, 'triangle'); tone(294, 0.12, 1.3); tone(392, 0.06, 1.0);
+    } else if (kind === 'page') {
+      const len = Math.floor(ctx.sampleRate * 0.18);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < len; i += 1) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+      const src = ctx.createBufferSource();
+      const g = ctx.createGain();
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass'; f.frequency.value = 2200; f.Q.value = 0.8;
+      g.gain.value = 0.12;
+      src.buffer = buf; src.connect(f); f.connect(g); g.connect(ctx.destination);
+      src.start(t);
+    }
+  } catch (err) { /* 音频被系统拦下就静默 */ }
+}
+
+function playWin(force = false, level = 1, streak = 1) {
   // 只有用户在设置里主动关掉时才用静态版；系统「减弱动画」不再静默拦截
   const reduced = !force && !!state.settings.lessMotion;
 
   const v = QUIZ_WINS[Math.floor(Math.random() * QUIZ_WINS.length)];
   const box = document.createElement('div');
-  box.className = 'win-burst anim-' + v.anim + (reduced ? ' is-static' : '');
+  box.className = 'win-burst lv' + level + ' anim-' + v.anim + (reduced ? ' is-static' : '');
   box.style.setProperty('--win-color', v.color);
 
-  // 碎片：从顶部飘落，带旋转与随机颜色/形状
-  const palette = ['#0f766e', '#b45309', '#c2410c', '#1d4ed8', '#d97706', '#34a89a'];
-  let dots = '';
-  for (let i = 0; i < 22; i += 1) {
-    const size = 5 + Math.round(Math.random() * 6);
-    const round = Math.random() > 0.5 ? '50%' : '2px';
-    dots += '<i style="left:' + Math.round(Math.random() * 100) + '%;'
-      + '--d:' + (Math.random() * 0.35).toFixed(2) + 's;'
-      + '--w:' + size + 'px;'
-      + '--h:' + Math.round(size * (0.7 + Math.random() * 0.9)) + 'px;'
-      + '--rad:' + round + ';'
-      + '--bg:' + palette[i % palette.length] + ';'
-      + '--x:' + Math.round((Math.random() - 0.5) * 180) + 'px;'
-      + '--r:' + Math.round(Math.random() * 720 - 360) + 'deg"></i>';
+  // 墨点：从中心向外溅开
+  const inkCount = level >= 3 ? 14 : level === 2 ? 10 : 7;
+  let ink = '';
+  for (let i = 0; i < inkCount; i += 1) {
+    const ang = (Math.PI * 2 * i) / inkCount + Math.random() * 0.5;
+    const dist = 60 + Math.random() * (level >= 3 ? 130 : 90);
+    ink += '<i style="--dx:' + Math.round(Math.cos(ang) * dist) + 'px;'
+      + '--dy:' + Math.round(Math.sin(ang) * dist) + 'px;'
+      + '--sz:' + Math.round(4 + Math.random() * (level >= 3 ? 12 : 8)) + 'px;'
+      + '--d:' + (Math.random() * 0.12).toFixed(2) + 's"></i>';
   }
-  box.innerHTML = '<div class="win-card"><div class="win-emoji">' + v.emoji + '</div>'
-    + '<div class="win-text">' + esc(v.text) + '</div></div>'
-    + '<div class="win-dots">' + dots + '</div>';
+
+  const streakText = level >= 3 ? '五连·通神' : level === 2 ? '三连·稳' : '';
+  box.innerHTML = '<div class="win-card">'
+    + '<div class="win-paper">'
+    + '<div class="win-char">' + esc(v.char) + '</div>'
+    + '<div class="win-seal"><span>' + esc(v.char) + '</span></div>'
+    + '</div>'
+    + '<div class="win-text">' + esc(v.text) + (streakText ? ' · ' + streakText : '') + '</div>'
+    + '</div>'
+    + '<div class="win-ink">' + ink + '</div>';
   document.body.appendChild(box);
   setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, reduced ? 1100 : 1600);
 }
@@ -814,7 +861,9 @@ function renderSettings() {
     + '。如果答题后没看到答对动画，先点下面这个按钮试一下。</p>'
     + '<div class="actions"><button class="btn" data-action="preview-win" type="button">预览答对动画</button>'
     + '<button class="btn' + (state.settings.lessMotion ? ' primary' : '') + '" data-action="toggle-motion" type="button">'
-    + (state.settings.lessMotion ? '已关闭动画（点此打开）' : '减弱动画') + '</button></div>'
+    + (state.settings.lessMotion ? '已关闭动画（点此打开）' : '减弱动画') + '</button>'
+    + '<button class="btn' + (state.settings.soundOn === false ? '' : ' primary') + '" data-action="toggle-sound" type="button">'
+    + (state.settings.soundOn === false ? '音效已关（点此打开）' : '音效开') + '</button></div>'
     + '<p class="sub" style="margin-top:10px">默认一定会放动画。如果觉得晃眼，点「减弱动画」改为静态提示。</p></div>'
     + '<div class="section"><h2>今天</h2>'
     + '<p class="sub">已复习 ' + reviewedToday() + ' 张 · 认识 ' + t.good + ' · 模糊 ' + t.hard + ' · 不认识 ' + t.again + '</p></div>'
@@ -1061,9 +1110,20 @@ if (view) {
       const i = Number(el.dataset.i);
       state.quiz.picked = i;
       const q = state.quiz.q;
-      if (q && q.options[i] && q.options[i].ok) await markRight(q);
+      const right = !!(q && q.options[i] && q.options[i].ok);
+      if (right) {
+        await markRight(q);
+        state.quiz.streak = (state.quiz.streak || 0) + 1;
+      } else {
+        state.quiz.streak = 0;
+      }
       render();
-      if (q && q.options[i] && q.options[i].ok) playWin();
+      if (right) {
+        const s = state.quiz.streak;
+        const level = s >= 5 ? 3 : s >= 3 ? 2 : 1;
+        playSound(level >= 3 ? 'gong' : 'bell');
+        playWin(false, level, s);
+      }
       return;
     }
     if (action === 'next-quiz') {
@@ -1079,7 +1139,15 @@ if (view) {
       if (card && ex) await toggleFav(card, ex, s);
       return;
     }
-    if (action === 'preview-win') { playWin(true); return; }
+    if (action === 'preview-win') { playSound('bell'); playWin(true, 1, 1); return; }
+    if (action === 'toggle-sound') {
+      state.settings = { ...state.settings, soundOn: state.settings.soundOn === false };
+      await db.setMeta('settings', state.settings);
+      render();
+      toast(state.settings.soundOn === false ? '音效已关闭' : '音效已打开');
+      if (state.settings.soundOn !== false) playSound('bell');
+      return;
+    }
     if (action === 'toggle-motion') {
       state.settings = { ...state.settings, lessMotion: !state.settings.lessMotion };
       await db.setMeta('settings', state.settings);
