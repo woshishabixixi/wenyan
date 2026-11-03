@@ -373,3 +373,64 @@ html, body {
   font-weight: 600;
 }
 .card-foot { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+/* 今日进度条 */
+.progress { margin: 4px 0 12px; }
+.progress-bar {
+  height: 6px;
+  background: #ece6dc;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #0f766e, #34a89a);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+.progress-text { margin-top: 6px; font-size: 12px; color: var(--ink-soft); text-align: center; }
+
+/* 难词标记 */
+.leech {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #9a3412;
+  background: #fdeee8;
+  border: 1px solid #f3c9b4;
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+/* 行内文字按钮 */
+.inline-link {
+  border: 0;
+  background: transparent;
+  color: var(--teal);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+/* 筛选标签 */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chip {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chip.is-on { background: var(--teal); border-color: var(--teal); color: #fff; }
+
+/* 未来 7 天柱状图 */
+.forecast { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; align-items: end; }
+.fc-col { text-align: center; }
+.fc-bar-wrap { height: 72px; display: flex; align-items: flex-end; justify-content: center; }
+.fc-bar { width: 60%; background: #9ecfc9; border-radius: 4px 4px 0 0; min-height: 2px; }
+.fc-num { font-size: 12px; color: var(--ink); margin-top: 4px; }
+.fc-day { font-size: 11px; color: var(--ink-soft); }

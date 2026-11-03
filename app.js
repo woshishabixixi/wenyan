@@ -21,6 +21,9 @@ const state = {
   relearn: [],
   peekedId: null,
   lastGraded: null,
+  lastUndo: null,
+  filter: 'all',
+  today: { date: '', again: 0, hard: 0, good: 0 },
   search: '',
   editor: null,
   batch: '',
@@ -109,6 +112,7 @@ async function loadAll() {
   state.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
   state.streak = (await db.getMeta('streak', null)) || { lastDate: '', count: 0 };
   state.newDone = (await db.getMeta('newDone', null)) || { date: '', count: 0 };
+  state.today = (await db.getMeta('todayStats', null)) || { date: '', again: 0, hard: 0, good: 0 };
 }
 
 /* ---------- 队列 ---------- */
@@ -163,6 +167,47 @@ async function persist(card) {
   await db.putCard(card);
 }
 
+function bumpTodayStats(grade, delta = 1) {
+  const today = dayKey();
+  const base = state.today.date === today ? state.today : { date: today, again: 0, hard: 0, good: 0 };
+  const next = { ...base };
+  if (grade === GRADES.AGAIN) next.again += delta;
+  else if (grade === GRADES.HARD) next.hard += delta;
+  else next.good += delta;
+  next.again = Math.max(0, next.again);
+  next.hard = Math.max(0, next.hard);
+  next.good = Math.max(0, next.good);
+  state.today = next;
+  db.setMeta('todayStats', state.today);
+}
+
+function reviewedToday() {
+  if (state.today.date !== dayKey()) return 0;
+  return state.today.again + state.today.hard + state.today.good;
+}
+
+async function undoLast() {
+  const u = state.lastUndo;
+  if (!u) { toast('没有可撤销的操作'); return; }
+  await persist(u.card);
+  state.relearn = u.relearn;
+  if (u.wasNew) {
+    const today = dayKey();
+    if (state.newDone.date === today && state.newDone.count > 0) {
+      state.newDone = { date: today, count: state.newDone.count - 1 };
+      db.setMeta('newDone', state.newDone);
+    }
+  }
+  bumpTodayStats(u.grade, -1);
+  state.lastUndo = null;
+  state.lastGraded = null;
+  state.peekedId = null;
+  rebuildQueue();
+  state.queue = [u.card.id, ...state.queue.filter((id) => id !== u.card.id)];
+  render();
+  toast('已撤销上一张');
+}
+
 function bumpNewDone() {
   const today = dayKey();
   const count = (state.newDone.date === today ? state.newDone.count : 0) + 1;
@@ -182,11 +227,13 @@ async function gradeCard(g) {
   const card = currentCard();
   if (!card) return;
   const wasNew = card.state === 'new';
+  state.lastUndo = { card: { ...card }, relearn: state.relearn.map((e) => ({ ...e })), wasNew, grade: g };
   const patched = { ...card, ...schedule(card, g, Date.now()) };
   await persist(patched);
   db.logReview({ id: card.id, grade: g });
   if (wasNew) bumpNewDone();
   bumpStreak();
+  bumpTodayStats(g);
   state.peekedId = null;
   state.lastGraded = { id: card.id, grade: g }; // 停在这张的答案上，等用户看完再「下一张」
   // 模糊 / 不认识：进「推迟名单」，本次会话内隔几张再抽回来；评「认识」则从名单移除
@@ -259,6 +306,16 @@ function renderSenses(card) {
 }
 
 const GRADE_LABEL = { 0: '不认识', 1: '模糊', 2: '认识' };
+const LEECH_LAPSES = 3; // 连续遗忘达到这个次数，自动标成「难词」
+
+function renderProgress() {
+  const done = reviewedToday();
+  const remain = state.queue.length;
+  const all = done + remain;
+  const pct = all ? Math.round((done / all) * 100) : 0;
+  return '<div class="progress"><div class="progress-bar"><i style="width:' + pct + '%"></i></div>'
+    + '<div class="progress-text">今日进度 ' + done + ' / ' + all + '</div></div>';
+}
 
 /** 评分后的答案页：显示这张的完整释义，等用户看完点「下一张」 */
 function renderAnswer() {
@@ -287,8 +344,11 @@ function renderReview() {
     return;
   }
   const peeked = state.peekedId === card.id;
-  view.innerHTML = '<div class="review-card" data-action="peek">'
-    + '<span class="badge">' + esc((card.tags && card.tags[0]) || (card.state === 'new' ? '新词' : '复习')) + '</span>'
+  const leech = (card.lapses || 0) >= LEECH_LAPSES
+    ? '<span class="leech">难词 ×' + esc(String(card.lapses)) + '</span>' : '';
+  view.innerHTML = renderProgress()
+    + '<div class="review-card" data-action="peek">'
+    + '<span class="badge">' + esc((card.tags && card.tags[0]) || (card.state === 'new' ? '新词' : '复习')) + leech + '</span>'
     + '<div class="word">' + esc(card.word) + '</div>'
     + '<div class="pinyin">' + (card.pinyin ? '/' + esc(card.pinyin) + '/' : '') + '<button class="speak" data-action="speak" type="button">🔊</button></div>'
     + (peeked ? renderSenses(card) : '<div class="hint">先在脑子里回想释义<br>判断完下面三档，立刻显示答案</div>')
@@ -303,7 +363,8 @@ function renderReview() {
     + '<button class="grade" data-action="grade" data-g="1" type="button">模糊</button>'
     + '<button class="grade" data-action="grade" data-g="2" type="button">认识</button>'
     + '</div>'
-    + '<div class="grade-note">' + (card.reps ? '已复习 ' + esc(String(card.reps)) + ' 次' : '新词 · 第一次复习') + ' · 点按钮后显示释义</div>';
+    + '<div class="grade-note">' + (card.reps ? '已复习 ' + esc(String(card.reps)) + ' 次' : '新词 · 第一次复习') + ' · 点按钮后显示释义'
+    + (state.lastUndo ? ' · <button class="inline-link" data-action="undo" type="button">撤销上一张</button>' : '') + '</div>';
 }
 
 function renderMastered() {
@@ -376,12 +437,39 @@ function syncEditorFromForm() {
   return state.editor;
 }
 
+const FILTERS = [
+  ['all', '全部'],
+  ['new', '未学'],
+  ['learning', '在学'],
+  ['leech', '难词'],
+  ['mastered', '已掌握'],
+];
+
+function matchesFilter(card) {
+  switch (state.filter) {
+    case 'new': return card.bucket === 'active' && card.state === 'new';
+    case 'learning': return card.bucket === 'active' && card.state !== 'new';
+    case 'leech': return card.bucket === 'active' && (card.lapses || 0) >= LEECH_LAPSES;
+    case 'mastered': return card.bucket === 'mastered';
+    default: return true;
+  }
+}
+
 function renderLibrary() {
   const q = state.search.trim();
   const list = Array.from(state.cards.values())
+    .filter(matchesFilter)
     .filter((c) => !q || c.word.includes(q) || senseSummary(c).includes(q))
     .sort((a, b) => (a.word > b.word ? 1 : a.word < b.word ? -1 : 0))
     .slice(0, 300);
+
+  const chips = '<div class="chips">' + FILTERS.map(([k, label]) => {
+    const n = Array.from(state.cards.values()).filter((c) => {
+      const keep = state.filter; state.filter = k; const ok = matchesFilter(c); state.filter = keep; return ok;
+    }).length;
+    return '<button class="chip' + (state.filter === k ? ' is-on' : '') + '" data-action="filter" data-f="' + k + '" type="button">'
+      + esc(label) + ' ' + n + '</button>';
+  }).join('') + '</div>';
 
   const head = '<div class="list-head"><input class="search" id="search" value="' + esc(state.search) + '" placeholder="搜索词或释义">'
     + '<button class="btn primary" data-action="new-card" type="button">+ 新增</button></div>';
@@ -393,7 +481,7 @@ function renderLibrary() {
     + '<button class="btn danger" data-action="drop-card" data-id="' + esc(c.id) + '" type="button">删除</button></div>').join('');
 
   view.innerHTML = (state.editor !== null ? renderEditor() : '')
-    + head
+    + head + chips
     + (list.length ? rows : '<div class="empty"><strong>没有匹配的词条</strong>换个关键词，或点「+ 新增」自己加。</div>')
     + '<div class="section"><h2>批量粘贴导入</h2>'
     + '<p class="sub">每行一条。最省事：<b>一行一个词</b>（释义之后再补）；也可以写「词 释义」或「词 拼音 释义」；'
@@ -402,12 +490,39 @@ function renderLibrary() {
     + '<div class="actions"><button class="btn primary" data-action="batch-import" type="button">导入</button></div></div>';
 }
 
+function forecast7() {
+  const buckets = [0, 0, 0, 0, 0, 0, 0];
+  const n = new Date();
+  const start = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+  state.cards.forEach((c) => {
+    if (c.bucket !== 'active' || c.state === 'new') return;
+    const d = Math.floor((c.due - start) / 86400000);
+    if (d < 0) buckets[0] += 1;
+    else if (d < 7) buckets[d] += 1;
+  });
+  return buckets;
+}
+
+function renderForecast() {
+  const b = forecast7();
+  const max = Math.max(1, ...b);
+  const labels = ['今', '明', '后', '3', '4', '5', '6'];
+  return '<div class="forecast">' + b.map((v, i) => '<div class="fc-col">'
+    + '<div class="fc-bar-wrap"><div class="fc-bar" style="height:' + Math.round((v / max) * 100) + '%"></div></div>'
+    + '<div class="fc-num">' + v + '</div>'
+    + '<div class="fc-day">' + labels[i] + '</div></div>').join('') + '</div>';
+}
+
 function renderSettings() {
   db.countCards().then((n) => {
     const el = document.getElementById('stats-line');
     if (el) el.textContent = '共 ' + n.total + ' 条 · 在学 ' + n.active + ' · 已掌握 ' + n.mastered;
   }).catch(() => {});
-  view.innerHTML = '<div class="section"><h2>每日新词上限</h2>'
+  const t = state.today.date === dayKey() ? state.today : { again: 0, hard: 0, good: 0 };
+  view.innerHTML = '<div class="section"><h2>今天</h2>'
+    + '<p class="sub">已复习 ' + reviewedToday() + ' 张 · 认识 ' + t.good + ' · 模糊 ' + t.hard + ' · 不认识 ' + t.again + '</p></div>'
+    + '<div class="section"><h2>未来 7 天到期</h2><p class="sub">这些卡会在对应那天排进复习队列。</p>' + renderForecast() + '</div>'
+    + '<div class="section"><h2>每日新词上限</h2>'
     + '<p class="sub">每天最多引入多少张新卡。学过的旧卡不受此限制，到点就会排进队列。</p>'
     + '<div class="field"><input id="f-limit" type="number" min="0" max="200" value="' + esc(state.settings.dailyNewLimit) + '"></div>'
     + '<div class="actions"><button class="btn primary" data-action="save-limit" type="button">保存</button></div></div>'
@@ -622,6 +737,12 @@ if (view) {
       return;
     }
     if (action === 'unpeek') { state.peekedId = null; render(); return; }
+    if (action === 'undo') { await undoLast(); return; }
+    if (action === 'filter') {
+      state.filter = el.dataset.f || 'all';
+      renderLibrary();
+      return;
+    }
     if (action === 'next-card') { state.lastGraded = null; state.peekedId = null; render(); return; }
     if (action === 'speak') {
       const card = currentCard();
@@ -727,6 +848,28 @@ if (view) {
     if (e.target && e.target.id === 'file') { importAll(e.target.files && e.target.files[0]); }
   });
 }
+
+/* ---------- 键盘快捷键（电脑上用更快） ---------- */
+document.addEventListener('keydown', (e) => {
+  const tag = e.target && e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (state.route !== 'review') return;
+  const k = e.key;
+  if (k === '1') { e.preventDefault(); gradeCard(GRADES.AGAIN); return; }
+  if (k === '2') { e.preventDefault(); gradeCard(GRADES.HARD); return; }
+  if (k === '3') { e.preventDefault(); gradeCard(GRADES.GOOD); return; }
+  if (k === ' ' || k === 'Enter') {
+    e.preventDefault();
+    if (state.lastGraded) { state.lastGraded = null; state.peekedId = null; render(); }
+    return;
+  }
+  if (k === 'u' || k === 'z') { e.preventDefault(); undoLast(); return; }
+  if (k === 'p') {
+    e.preventDefault();
+    const c = currentCard();
+    if (c) { state.peekedId = state.peekedId === c.id ? null : c.id; render(); }
+  }
+});
 
 /* ---------- 启动 ---------- */
 
