@@ -799,3 +799,37 @@ html, body {
 .combo-grid div { background: #f8f5f0; border-radius: 10px; padding: 10px 4px; }
 .combo-grid span { display: block; font-size: 11px; color: var(--ink-soft); margin-bottom: 4px; }
 .combo-grid b { font-size: 18px; color: var(--teal); }
+/* ===== 连对进阶：进度条 + 卡片描边 ===== */
+.combo-track {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 10px;
+  height: 4px;
+  border-radius: 999px;
+  background: #eee9e1;
+  overflow: hidden;
+}
+.combo-track > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #0f766e;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+.combo-track[data-lv="2"] > i { background: #d97706; }
+.combo-track[data-lv="3"] > i { background: #c2410c; }
+.combo-track[data-lv="4"] > i { background: linear-gradient(90deg, #b91c1c, #d97706); }
+
+.review-card.is-quiz { position: relative; padding-top: 22px; }
+.review-card.quiz-lv1 { box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.25), var(--shadow); }
+.review-card.quiz-lv2 { box-shadow: 0 0 0 1.5px rgba(217, 119, 6, 0.5), 0 6px 22px rgba(217, 119, 6, 0.12); }
+.review-card.quiz-lv3 { box-shadow: 0 0 0 2px rgba(194, 65, 12, 0.55), 0 8px 26px rgba(194, 65, 12, 0.16); }
+.review-card.quiz-lv4 {
+  box-shadow: 0 0 0 2.5px rgba(185, 28, 28, 0.6), 0 10px 30px rgba(185, 28, 28, 0.2);
+  animation: cardBreath 2s ease-in-out infinite;
+}
+@keyframes cardBreath {
+  0%, 100% { box-shadow: 0 0 0 2.5px rgba(185, 28, 28, 0.6), 0 10px 30px rgba(185, 28, 28, 0.2); }
+  50%      { box-shadow: 0 0 0 3.5px rgba(217, 119, 6, 0.55), 0 12px 34px rgba(185, 28, 28, 0.24); }
+}

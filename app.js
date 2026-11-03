@@ -2,7 +2,7 @@ import { GRADES, schedule, newCardState, describeInterval, buildQueue } from './
 import * as db from './db.js';
 
 const DECK_URL = './data/deck.builtin.json';
-const APP_VERSION = 'v36'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
+const APP_VERSION = 'v37'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
 const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4, lessMotion: false, soundOn: true, soundStyle: 'random' };
 const RELEARN_GAP_MIN = 3;   // 硬下限：模糊/不认识的词至少隔 3 张才回来
 const RELEARN_GAP_MAX = 10;
@@ -717,8 +717,15 @@ function renderQuiz() {
     + (q.ex.source ? ' <span class="src">—— ' + esc(q.ex.source) + '</span>' : '') + '</span></div>'
     + '<div class="next-bar"><button class="btn primary btn-wide" data-action="next-quiz" type="button">下一题</button></div>';
 
+  const st = state.quiz.streak || 0;
+  const lv = st >= 10 ? 4 : st >= 5 ? 3 : st >= 3 ? 2 : st >= 1 ? 1 : 0;
+  const nextAt = st >= 10 ? 10 : st >= 5 ? 10 : st >= 3 ? 5 : 3;
+  const prevAt = st >= 10 ? 5 : st >= 5 ? 3 : st >= 3 ? 3 : 0;
+  const pct = Math.max(0, Math.min(100, Math.round(((st - prevAt) / Math.max(1, nextAt - prevAt)) * 100)));
+
   view.innerHTML = renderModeSwitch()
-    + '<div class="review-card is-answered is-quiz">'
+    + '<div class="review-card is-answered is-quiz quiz-lv' + lv + '">'
+    + '<div class="combo-track" data-lv="' + lv + '"><i style="width:' + pct + '%"></i></div>'
     + '<span class="badge">例句填空 · 第 ' + ((state.quiz.n || 0) + 1) + ' 题'
     + ' <b class="combo" data-lv="' + ((state.quiz.streak >= 10) ? 4 : (state.quiz.streak >= 5) ? 3 : (state.quiz.streak >= 3) ? 2 : (state.quiz.streak >= 1) ? 1 : 0) + '">连对 ×' + (state.quiz.streak || 0) + '</b>'
     + '</span>'
@@ -966,6 +973,9 @@ function renderSettings() {
     + '<p class="sub">界面版本 <b>' + esc(APP_VERSION) + '</b> · 词库 ' + esc(String(state.cards.size || 0)) + ' 条'
     + '。如果答题后没看到答对动画，先点下面这个按钮试一下。</p>'
     + '<div class="actions"><button class="btn" data-action="preview-win" type="button">预览答对动画</button>'
+    + '<button class="btn" data-action="preview-combo" data-lv="2" type="button">预览 3 连</button>'
+    + '<button class="btn" data-action="preview-combo" data-lv="3" type="button">预览 5 连</button>'
+    + '<button class="btn" data-action="preview-combo" data-lv="4" type="button">预览 10 连</button>'
     + '<button class="btn' + (state.settings.lessMotion ? ' primary' : '') + '" data-action="toggle-motion" type="button">'
     + (state.settings.lessMotion ? '已关闭动画（点此打开）' : '减弱动画') + '</button>'
     + '<button class="btn' + (state.settings.soundOn === false ? '' : ' primary') + '" data-action="cycle-sound" type="button">'
@@ -1294,6 +1304,13 @@ if (view) {
       return;
     }
     if (action === 'preview-win') { playSound('bell'); playWin(true, 1, 1); return; }
+    if (action === 'preview-combo') {
+      const lv = Number(el.dataset.lv) || 2;
+      const streak = lv === 4 ? 10 : lv === 3 ? 5 : 3;
+      playSound('gong');
+      playWin(true, lv, streak);
+      return;
+    }
     if (action === 'cycle-sound') {
       const cur = state.settings.soundOn === false ? 'off' : (state.settings.soundStyle || 'guqin');
       const i = SOUND_STYLES.findIndex((s) => s.id === cur);
