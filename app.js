@@ -25,6 +25,8 @@ const state = {
   filter: 'all',
   today: { date: '', again: 0, hard: 0, good: 0 },
   favs: [],
+  right: [],
+  favView: 'favs',
   mode: 'review',
   quiz: { q: null, picked: null, n: 0 },
   search: '',
@@ -147,6 +149,7 @@ async function loadAll() {
   state.newDone = (await db.getMeta('newDone', null)) || { date: '', count: 0 };
   state.today = (await db.getMeta('todayStats', null)) || { date: '', again: 0, hard: 0, good: 0 };
   state.favs = (await db.getMeta('favs', null)) || [];
+  state.right = (await db.getMeta('quizRight', null)) || [];
 }
 
 /* ---------- 队列 ---------- */
@@ -431,45 +434,110 @@ function renderModeSwitch() {
 
 /** 出一道「这句里这个字是什么意思」的选择题：同词的其他义项优先做干扰项 */
 function buildQuiz() {
-  const pool = [];
-  state.cards.forEach((c) => {
-    if (c.bucket !== 'active') return;
-    (c.senses || []).forEach((s, si) => {
-      const exs = senseExamples(s);
-      if (!exs.length || !s.def) return;
-      pool.push({ card: c, si, sense: s, ex: exs[Math.floor(Math.random() * exs.length)] });
-    });
-  });
+  // 题库 = 你收藏过的例句（收藏时已带释义；老数据按例句反查）
+  const pool = state.favs
+    .map((f) => {
+      const card = state.cards.get(f.cardId);
+      const def = f.def || lookupDefByExample(f);
+      if (!card || !def || !f.text) return null;
+      const sense = (card.senses || []).find((s) => s.def === def) || { def };
+      return { card, sense, fav: f, def };
+    })
+    .filter(Boolean);
+
   if (!pool.length) return null;
   const pick = pool[Math.floor(Math.random() * pool.length)];
 
   const opts = new Map();
-  opts.set(pick.sense.def, true);
-  // 干扰项优先级：同一个词的其他义项 → 同词性的义项 → 随便
-  (pick.card.senses || []).forEach((s, i) => {
-    if (i !== pick.si && s.def && !opts.has(s.def) && opts.size < 4) opts.set(s.def, false);
+  opts.set(pick.def, true);
+  // 干扰项优先级：同一个词的其他义项 → 其他收藏的释义 → 同词性的义项
+  (pick.card.senses || []).forEach((s) => {
+    if (s.def && !opts.has(s.def) && opts.size < 4) opts.set(s.def, false);
   });
-  const samePos = pool.filter((p) => p.sense.pos && p.sense.pos === pick.sense.pos);
   let guard = 0;
-  while (opts.size < 4 && guard < 300) {
+  while (opts.size < 4 && guard < 400) {
     guard += 1;
-    const src = samePos.length > guard - 1 ? samePos : pool;
-    const other = src[Math.floor(Math.random() * src.length)];
-    if (other && other.sense.def && !opts.has(other.sense.def)) opts.set(other.sense.def, false);
+    if (guard < 200) {
+      const o = pool[Math.floor(Math.random() * pool.length)];
+      if (o.def && !opts.has(o.def)) opts.set(o.def, false);
+    } else {
+      const all = Array.from(state.cards.values());
+      const c = all[Math.floor(Math.random() * all.length)];
+      const s = (c.senses || [])[Math.floor(Math.random() * (c.senses || []).length)];
+      if (s && s.def && !opts.has(s.def)) opts.set(s.def, false);
+    }
   }
   const options = Array.from(opts.entries()).map(([def, ok]) => ({ def, ok }));
   for (let i = options.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
     const t = options[i]; options[i] = options[j]; options[j] = t;
   }
-  return { cardId: pick.card.id, word: pick.card.word, ex: pick.ex, options, right: pick.sense.def };
+  return {
+    cardId: pick.card.id,
+    word: pick.card.word,
+    def: pick.def,
+    ex: { text: pick.fav.text, source: pick.fav.source || '', translation: pick.fav.translation || '' },
+    options,
+    right: pick.def,
+  };
+}
+
+/** 答对时的庆祝动画：10 套随机文案 + 配色，答完即散，不挡操作 */
+const QUIZ_WINS = [
+  { emoji: '🎉', text: '答对了！', color: '#0f766e' },
+  { emoji: '✨', text: '漂亮！', color: '#b45309' },
+  { emoji: '👏', text: '一字不差', color: '#0f766e' },
+  { emoji: '🔥', text: '稳！', color: '#c2410c' },
+  { emoji: '🎯', text: '正中靶心', color: '#0f766e' },
+  { emoji: '📖', text: '记住了', color: '#1d4ed8' },
+  { emoji: '⭐', text: '这题满分', color: '#b45309' },
+  { emoji: '🏮', text: '文言通了', color: '#9a3412' },
+  { emoji: '🍃', text: '轻舟已过', color: '#0f766e' },
+  { emoji: '💯', text: '漂亮，继续', color: '#0f766e' },
+];
+
+function playWin() {
+  try {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  } catch (err) { /* 忽略 */ }
+
+  const v = QUIZ_WINS[Math.floor(Math.random() * QUIZ_WINS.length)];
+  const box = document.createElement('div');
+  box.className = 'win-burst';
+  box.style.setProperty('--win-color', v.color);
+
+  let dots = '';
+  for (let i = 0; i < 16; i += 1) {
+    dots += '<i style="left:' + Math.round(Math.random() * 100) + '%;'
+      + '--d:' + (Math.random() * 0.25).toFixed(2) + 's;'
+      + '--x:' + Math.round((Math.random() - 0.5) * 220) + 'px;'
+      + '--r:' + Math.round(Math.random() * 540) + 'deg"></i>';
+  }
+  box.innerHTML = '<div class="win-card"><div class="win-emoji">' + v.emoji + '</div>'
+    + '<div class="win-text">' + esc(v.text) + '</div></div>'
+    + '<div class="win-dots">' + dots + '</div>';
+  document.body.appendChild(box);
+  setTimeout(() => { if (box.parentNode) box.parentNode.removeChild(box); }, 1500);
+}
+
+async function markRight(q) {
+  const key = q.cardId + '\u0001' + q.ex.text;
+  const exists = state.right.some((r) => r.cardId + '\u0001' + r.text === key);
+  if (exists) return;
+  state.right.unshift({
+    cardId: q.cardId, word: q.word, def: q.def,
+    text: q.ex.text, source: q.ex.source, translation: q.ex.translation, at: Date.now(),
+  });
+  await db.setMeta('quizRight', state.right);
 }
 
 function renderQuiz() {
   if (!state.quiz.q) state.quiz.q = buildQuiz();
   const q = state.quiz.q;
   if (!q) {
-    view.innerHTML = renderModeSwitch() + '<div class="empty"><strong>还没有可用来出题的例句</strong>等词库里有带例句的词条后就能练了。</div>';
+    view.innerHTML = renderModeSwitch()
+      + '<div class="empty"><strong>还没有收藏的例句</strong>填空只从你收藏的例句里出题。<br>'
+      + '去「收藏」页背词时点例句左边的 ☆，收几条就能开始练。</div>';
     return;
   }
   const picked = state.quiz.picked;
@@ -485,7 +553,7 @@ function renderQuiz() {
   }).join('');
 
   const feedback = picked === null ? '' : '<div class="quiz-result ' + (q.options[picked].ok ? 'ok' : 'no') + '">'
-    + (q.options[picked].ok ? '✅ 答对了' : '❌ 正确答案：' + esc(q.right))
+    + (q.options[picked].ok ? '✅ 答对了 · 已加入答对列表' : '❌ 正确答案：' + esc(q.right))
     + '</div>'
     + '<div class="sense-ex quiz-trans"><span class="ex-text">译文：' + esc(q.ex.translation || '（这条暂无译文）')
     + (q.ex.source ? ' <span class="src">—— ' + esc(q.ex.source) + '</span>' : '') + '</span></div>'
@@ -548,11 +616,30 @@ function lookupDefByExample(f) {
 }
 
 function renderFavs() {
-  if (!state.favs.length) {
-    view.innerHTML = '<div class="empty"><strong>还没有收藏的例句</strong>背词时，每条例句左边有个 ☆，点一下就把这句收进来，方便集中回看。</div>';
+  const chips = '<div class="chips">'
+    + '<button class="chip' + (state.favView !== 'right' ? ' is-on' : '') + '" data-action="fav-view" data-v="favs" type="button">例句收藏 ' + state.favs.length + '</button>'
+    + '<button class="chip' + (state.favView === 'right' ? ' is-on' : '') + '" data-action="fav-view" data-v="right" type="button">答对列表 ' + state.right.length + '</button>'
+    + '</div>';
+
+  if (state.favView === 'right') {
+    if (!state.right.length) {
+      view.innerHTML = chips + '<div class="empty"><strong>答对列表还是空的</strong>去「例句填空」答题，答对的会自动记到这里。</div>';
+      return;
+    }
+    view.innerHTML = chips + '<div class="section" style="padding:12px 14px">共 ' + state.right.length + ' 句答对过</div>'
+      + state.right.map((r, i) => '<div class="row"><div class="row-main">'
+        + '<div class="row-word">' + esc(r.word || '') + '</div>'
+        + '<div class="fav-def">' + esc(r.def || '') + '</div>'
+        + '<div class="fav-ex">' + esc(r.text) + (r.source ? ' <span class="src">—— ' + esc(r.source) + '</span>' : '') + '</div>'
+        + '</div><button class="btn" data-action="unright" data-fi="' + i + '" type="button">移出</button></div>').join('');
     return;
   }
-  view.innerHTML = '<div class="section" style="padding:12px 14px">共 ' + state.favs.length + ' 条例句收藏</div>'
+
+  if (!state.favs.length) {
+    view.innerHTML = chips + '<div class="empty"><strong>还没有收藏的例句</strong>背词时，每条例句左边有个 ☆，点一下就把这句收进来；例句填空也从这里出题。</div>';
+    return;
+  }
+  view.innerHTML = chips + '<div class="section" style="padding:12px 14px">共 ' + state.favs.length + ' 条例句收藏</div>'
     + state.favs.map((f, i) => '<div class="row"><div class="row-main">'
       + '<div class="row-word">' + esc(f.word || '') + '</div>'
       + '<div class="fav-def">' + (f.pos ? '<span class="sense-pos">' + esc(f.pos) + '</span>' : '')
@@ -956,8 +1043,12 @@ if (view) {
     }
     if (action === 'answer') {
       if (state.quiz.picked !== null) return;
-      state.quiz.picked = Number(el.dataset.i);
+      const i = Number(el.dataset.i);
+      state.quiz.picked = i;
+      const q = state.quiz.q;
+      if (q && q.options[i] && q.options[i].ok) await markRight(q);
       render();
+      if (q && q.options[i] && q.options[i].ok) playWin();
       return;
     }
     if (action === 'next-quiz') {
@@ -971,6 +1062,21 @@ if (view) {
       const s = card && card.senses ? card.senses[Number(el.dataset.si)] : null;
       const ex = s ? senseExamples(s)[Number(el.dataset.ei)] : null;
       if (card && ex) await toggleFav(card, ex, s);
+      return;
+    }
+    if (action === 'fav-view') {
+      state.favView = el.dataset.v === 'right' ? 'right' : 'favs';
+      render();
+      return;
+    }
+    if (action === 'unright') {
+      const i = Number(el.dataset.fi);
+      if (i >= 0 && i < state.right.length) {
+        state.right.splice(i, 1);
+        await db.setMeta('quizRight', state.right);
+        render();
+        toast('已移出答对列表');
+      }
       return;
     }
     if (action === 'unfav') {

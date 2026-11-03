@@ -496,3 +496,42 @@ html, body {
 .fav-def { margin-top: 6px; font-size: 14px; color: #3e4c59; }
 /* 填空模式：题目卡不需要那么高 */
 .review-card.is-quiz { min-height: 0; padding-bottom: 18px; }
+/* 答对庆祝动画 */
+.win-burst { position: fixed; inset: 0; pointer-events: none; z-index: 80; display: grid; place-items: center; }
+.win-card { text-align: center; animation: winPop 1.05s cubic-bezier(0.2, 0.9, 0.2, 1) forwards; }
+.win-emoji { font-size: 58px; line-height: 1; filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.12)); }
+.win-text {
+  margin-top: 8px;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--win-color, #0f766e);
+  text-shadow: 0 2px 14px rgba(255, 255, 255, 0.95);
+}
+@keyframes winPop {
+  0%   { transform: scale(0.35) translateY(10px); opacity: 0; }
+  22%  { transform: scale(1.08) translateY(0);    opacity: 1; }
+  45%  { transform: scale(0.98);                  opacity: 1; }
+  70%  { transform: scale(1);                     opacity: 1; }
+  100% { transform: scale(1) translateY(-16px);   opacity: 0; }
+}
+.win-dots { position: absolute; inset: 0; }
+.win-dots i {
+  position: absolute;
+  top: 54%;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--win-color, #0f766e);
+  opacity: 0;
+  animation: winDot 0.95s ease-out forwards;
+  animation-delay: var(--d, 0s);
+}
+@keyframes winDot {
+  0%   { opacity: 1; transform: translate(0, 0) rotate(0deg) scale(1); }
+  100% { opacity: 0; transform: translate(var(--x, 0), -130px) rotate(var(--r, 0deg)) scale(0.6); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .win-card { animation: none; opacity: 1; }
+  .win-dots i { animation: none; opacity: 0; }
+}
