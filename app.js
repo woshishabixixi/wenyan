@@ -2,7 +2,7 @@ import { GRADES, schedule, newCardState, describeInterval, buildQueue } from './
 import * as db from './db.js';
 
 const DECK_URL = './data/deck.builtin.json';
-const APP_VERSION = 'v30'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
+const APP_VERSION = 'v31'; // 与 sw.js 的 CACHE_VERSION 对应，设置页会显示
 const DEFAULT_SETTINGS = { dailyNewLimit: 20, relearnGap: 4, lessMotion: false };
 const RELEARN_GAP_MIN = 3;   // 硬下限：模糊/不认识的词至少隔 3 张才回来
 const RELEARN_GAP_MAX = 10;
@@ -485,16 +485,16 @@ function buildQuiz() {
 
 /** 答对时的庆祝动画：10 套随机文案 + 配色，答完即散，不挡操作 */
 const QUIZ_WINS = [
-  { emoji: '🎉', text: '答对了！', color: '#0f766e' },
-  { emoji: '✨', text: '漂亮！', color: '#b45309' },
-  { emoji: '👏', text: '一字不差', color: '#0f766e' },
-  { emoji: '🔥', text: '稳！', color: '#c2410c' },
-  { emoji: '🎯', text: '正中靶心', color: '#0f766e' },
-  { emoji: '📖', text: '记住了', color: '#1d4ed8' },
-  { emoji: '⭐', text: '这题满分', color: '#b45309' },
-  { emoji: '🏮', text: '文言通了', color: '#9a3412' },
-  { emoji: '🍃', text: '轻舟已过', color: '#0f766e' },
-  { emoji: '💯', text: '漂亮，继续', color: '#0f766e' },
+  { emoji: '🎉', text: '答对了！', color: '#0f766e', anim: 'pop' },
+  { emoji: '✨', text: '漂亮！', color: '#b45309', anim: 'swing' },
+  { emoji: '👏', text: '一字不差', color: '#0f766e', anim: 'slideUp' },
+  { emoji: '🔥', text: '稳！', color: '#c2410c', anim: 'bounce' },
+  { emoji: '🎯', text: '正中靶心', color: '#0f766e', anim: 'zoomIn' },
+  { emoji: '📖', text: '记住了', color: '#1d4ed8', anim: 'flip' },
+  { emoji: '⭐', text: '这题满分', color: '#b45309', anim: 'spin' },
+  { emoji: '🏮', text: '文言通了', color: '#9a3412', anim: 'wobble' },
+  { emoji: '🍃', text: '轻舟已过', color: '#0f766e', anim: 'drift' },
+  { emoji: '💯', text: '漂亮，继续', color: '#0f766e', anim: 'burst' },
 ];
 
 function playWin(force = false) {
@@ -503,15 +503,23 @@ function playWin(force = false) {
 
   const v = QUIZ_WINS[Math.floor(Math.random() * QUIZ_WINS.length)];
   const box = document.createElement('div');
-  box.className = 'win-burst' + (reduced ? ' is-static' : '');
+  box.className = 'win-burst anim-' + v.anim + (reduced ? ' is-static' : '');
   box.style.setProperty('--win-color', v.color);
 
+  // 碎片：从顶部飘落，带旋转与随机颜色/形状
+  const palette = ['#0f766e', '#b45309', '#c2410c', '#1d4ed8', '#d97706', '#34a89a'];
   let dots = '';
-  for (let i = 0; i < 16; i += 1) {
+  for (let i = 0; i < 22; i += 1) {
+    const size = 5 + Math.round(Math.random() * 6);
+    const round = Math.random() > 0.5 ? '50%' : '2px';
     dots += '<i style="left:' + Math.round(Math.random() * 100) + '%;'
-      + '--d:' + (Math.random() * 0.25).toFixed(2) + 's;'
-      + '--x:' + Math.round((Math.random() - 0.5) * 220) + 'px;'
-      + '--r:' + Math.round(Math.random() * 540) + 'deg"></i>';
+      + '--d:' + (Math.random() * 0.35).toFixed(2) + 's;'
+      + '--w:' + size + 'px;'
+      + '--h:' + Math.round(size * (0.7 + Math.random() * 0.9)) + 'px;'
+      + '--rad:' + round + ';'
+      + '--bg:' + palette[i % palette.length] + ';'
+      + '--x:' + Math.round((Math.random() - 0.5) * 180) + 'px;'
+      + '--r:' + Math.round(Math.random() * 720 - 360) + 'deg"></i>';
   }
   box.innerHTML = '<div class="win-card"><div class="win-emoji">' + v.emoji + '</div>'
     + '<div class="win-text">' + esc(v.text) + '</div></div>'

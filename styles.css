@@ -498,7 +498,19 @@ html, body {
 .review-card.is-quiz { min-height: 0; padding-bottom: 18px; }
 /* 答对庆祝动画 */
 .win-burst { position: fixed; inset: 0; pointer-events: none; z-index: 80; display: grid; place-items: center; }
-.win-card { text-align: center; animation: winPop 1.05s cubic-bezier(0.2, 0.9, 0.2, 1) forwards; }
+.win-card { text-align: center; animation-duration: 1.6s; animation-timing-function: cubic-bezier(0.22, 0.9, 0.25, 1); animation-fill-mode: forwards; }
+.win-burst { perspective: 800px; }
+/* 10 种动作，随机搭配文案 */
+.anim-pop .win-card { animation-name: winPop; }
+.anim-swing .win-card { animation-name: winSwing; }
+.anim-slideUp .win-card { animation-name: winSlideUp; }
+.anim-bounce .win-card { animation-name: winBounce; }
+.anim-zoomIn .win-card { animation-name: winZoomIn; }
+.anim-flip .win-card { animation-name: winFlip; animation-timing-function: cubic-bezier(0.3, 1.4, 0.5, 1); }
+.anim-spin .win-card { animation-name: winSpin; }
+.anim-wobble .win-card { animation-name: winWobble; }
+.anim-drift .win-card { animation-name: winDrift; }
+.anim-burst .win-card { animation-name: winBurst; }
 .win-emoji { font-size: 58px; line-height: 1; filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.12)); }
 .win-text {
   margin-top: 8px;
@@ -515,21 +527,83 @@ html, body {
   70%  { transform: scale(1);                     opacity: 1; }
   100% { transform: scale(1) translateY(-16px);   opacity: 0; }
 }
+@keyframes winSwing {
+  0%   { transform: translateX(-90px) rotate(-22deg) scale(0.7); opacity: 0; }
+  30%  { transform: translateX(0) rotate(8deg) scale(1.05);      opacity: 1; }
+  50%  { transform: rotate(-6deg);                               opacity: 1; }
+  70%  { transform: rotate(4deg);                                opacity: 1; }
+  100% { transform: rotate(0deg) translateY(-14px) scale(1);     opacity: 0; }
+}
+@keyframes winSlideUp {
+  0%   { transform: translateY(60px); opacity: 0; }
+  35%  { transform: translateY(-6px); opacity: 1; }
+  60%  { transform: translateY(0);    opacity: 1; }
+  100% { transform: translateY(-18px); opacity: 0; }
+}
+@keyframes winBounce {
+  0%   { transform: translateY(-70px) scale(0.9); opacity: 0; }
+  25%  { transform: translateY(0) scale(1.06);    opacity: 1; }
+  45%  { transform: translateY(-22px) scale(0.98); opacity: 1; }
+  62%  { transform: translateY(0) scale(1.03);    opacity: 1; }
+  78%  { transform: translateY(-8px);             opacity: 1; }
+  100% { transform: translateY(0) scale(1);       opacity: 0; }
+}
+@keyframes winZoomIn {
+  0%   { transform: scale(2.4); opacity: 0; filter: blur(6px); }
+  40%  { transform: scale(0.94); opacity: 1; filter: blur(0); }
+  65%  { transform: scale(1.02); opacity: 1; }
+  100% { transform: scale(1) translateY(-12px); opacity: 0; }
+}
+@keyframes winFlip {
+  0%   { transform: rotateY(90deg) scale(0.8); opacity: 0; }
+  45%  { transform: rotateY(-12deg) scale(1.04); opacity: 1; }
+  70%  { transform: rotateY(4deg);               opacity: 1; }
+  100% { transform: rotateY(0deg) translateY(-12px); opacity: 0; }
+}
+@keyframes winSpin {
+  0%   { transform: rotate(-200deg) scale(0.2); opacity: 0; }
+  45%  { transform: rotate(0deg) scale(1.12);   opacity: 1; }
+  70%  { transform: rotate(0deg) scale(1);      opacity: 1; }
+  100% { transform: rotate(0deg) scale(1) translateY(-16px); opacity: 0; }
+}
+@keyframes winWobble {
+  0%   { transform: rotate(0deg) scale(0.6);   opacity: 0; }
+  20%  { transform: rotate(14deg) scale(1.06); opacity: 1; }
+  38%  { transform: rotate(-12deg);            opacity: 1; }
+  56%  { transform: rotate(8deg);              opacity: 1; }
+  74%  { transform: rotate(-4deg);             opacity: 1; }
+  100% { transform: rotate(0deg) translateY(-16px); opacity: 0; }
+}
+@keyframes winDrift {
+  0%   { transform: translate(-70px, 30px) rotate(-14deg); opacity: 0; }
+  40%  { transform: translate(0, 0) rotate(0deg);          opacity: 1; }
+  70%  { transform: translate(10px, -6px) rotate(3deg);    opacity: 1; }
+  100% { transform: translate(30px, -26px) rotate(8deg);   opacity: 0; }
+}
+@keyframes winBurst {
+  0%   { transform: scale(0.1) rotate(0deg);   opacity: 0; }
+  30%  { transform: scale(1.25) rotate(10deg); opacity: 1; }
+  55%  { transform: scale(0.96) rotate(-4deg); opacity: 1; }
+  75%  { transform: scale(1) rotate(0deg);     opacity: 1; }
+  100% { transform: scale(1.05) translateY(-14px); opacity: 0; }
+}
 .win-dots { position: absolute; inset: 0; }
 .win-dots i {
   position: absolute;
-  top: 54%;
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  background: var(--win-color, #0f766e);
+  top: -14px;
+  width: var(--w, 7px);
+  height: var(--h, 10px);
+  border-radius: var(--rad, 2px);
+  background: var(--bg, #0f766e);
   opacity: 0;
-  animation: winDot 0.95s ease-out forwards;
+  animation: winFall 1.5s cubic-bezier(0.35, 0.1, 0.6, 1) forwards;
   animation-delay: var(--d, 0s);
 }
-@keyframes winDot {
-  0%   { opacity: 1; transform: translate(0, 0) rotate(0deg) scale(1); }
-  100% { opacity: 0; transform: translate(var(--x, 0), -130px) rotate(var(--r, 0deg)) scale(0.6); }
+@keyframes winFall {
+  0%   { opacity: 0; transform: translate(0, 0) rotate(0deg) scale(0.6); }
+  12%  { opacity: 1; }
+  75%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--x, 0), 62vh) rotate(var(--r, 360deg)) scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {
   .win-card { animation: none; opacity: 1; }
